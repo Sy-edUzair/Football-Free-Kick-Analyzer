@@ -1,0 +1,11 @@
+.venv/
+dataset/
+dataset.zip
+outputs/
+
+*.pt
+*.pth
+*.h5
+
+__pycache__/
+*.pyc
