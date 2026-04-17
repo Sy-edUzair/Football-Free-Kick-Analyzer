@@ -42,11 +42,11 @@ class Settings(BaseSettings):
 
     # ── Kick detection ────────────────────────────────────────────────────────
     # Minimum frames between two separate kick events
-    MIN_FRAMES_BETWEEN_KICKS: int = Field(default=30)
+    MIN_FRAMES_BETWEEN_KICKS: int = Field(default=120)  # 4 seconds at 30fps
     # How many consecutive frames ball must be missing to trigger "kick" detection
     BALL_DISAPPEAR_FRAMES: int = Field(default=3)
     # Minimum ball displacement (pixels) to count as a kick
-    MIN_KICK_DISPLACEMENT: float = Field(default=40.0)
+    MIN_KICK_DISPLACEMENT: float = Field(default=80.0)  # Raised from 40 - running stride too close
     # Enable refinement pass: full-frame scan around detected kicks (slower but catches all kicks)
     ENABLE_KICK_REFINEMENT: bool = Field(default=False)
     # Only flag disappearance as kick if last detection had confidence > this threshold
@@ -57,13 +57,15 @@ class Settings(BaseSettings):
 
     # ── Enhanced kick detection signals ────────────────────────────────────────
     # Minimum ball velocity (pixels/frame) to trigger kick signal
-    MIN_KICK_VELOCITY: float = Field(default=150.0)
+    MIN_KICK_VELOCITY: float = Field(default=200.0)  # Foot-first algorithm requires strong ball response
     # Minimum ball acceleration (pixels/frame²) to trigger kick signal
-    MIN_KICK_ACCELERATION: float = Field(default=100.0)
+    MIN_KICK_ACCELERATION: float = Field(
+        default=500.0
+    )  # Foot-first algorithm with physics validation
     # Minimum player foot velocity (pixels/frame) to validate kicking motion
-    MIN_FOOT_VELOCITY_FOR_KICK: float = Field(default=100.0)
+    MIN_FOOT_VELOCITY_FOR_KICK: float = Field(default=100.0)  # Foot-first algorithm detects acceleration spikes
     # Maximum distance from foot to ball (pixels) for kick validation
-    MAX_FOOT_TO_BALL_DISTANCE: float = Field(default=150.0)
+    MAX_FOOT_TO_BALL_DISTANCE: float = Field(default=100.0)  # Strict foot proximity
 
     # ── Pose estimation (MediaPipe) ───────────────────────────────────────────
     # Path to pose_landmarker.task model file (new Tasks API)
@@ -91,6 +93,8 @@ class Settings(BaseSettings):
     TEXT_COLOR: tuple = Field(default=(255, 255, 255))  # White
     # Max trajectory trail length in frames
     TRAJECTORY_MAX_POINTS: int = Field(default=30)
+
+    MEDIAPIPE_POSE_MODEL_PATH = "/home/syed-uzair-hussain-zaidi/Office Work/Tezeract/Pose_Estimation/freekick_analyzer/pose_landmarker_full.task"
 
     class Config:
         env_file = ".env"

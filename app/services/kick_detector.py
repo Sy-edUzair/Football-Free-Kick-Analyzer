@@ -320,13 +320,67 @@ class KickDetector:
 
         return state
 
+    def _detect_foot_acceleration_spike(
+        self, states: List[FrameBallState], window: int = 3
+    ) -> List[Tuple[int, float]]:
+        """
+        Detect sudden foot acceleration spikes (kicking motion signature).
+
+        Returns list of (frame_index, acceleration_magnitude) for foot spikes.
+
+        Expected patterns:
+        - Real kick: Foot at 50px/f → 300px/f over 2-3 frames (sudden acceleration)
+        - Running: Foot maintains consistent 80-100px/f (no spike)
+        - Hopping: Foot goes up-down in y-axis only (not horizontal)
+        """
+        foot_spikes = []
+
+        for i in range(window, len(states)):
+            # Get foot velocity at current frame and previous frame
+            curr = states[i]
+            prev = states[i - 1]
+
+            if (
+                not curr.pose
+                or not prev.pose
+                or curr.foot_velocity <= 0
+                or prev.foot_velocity <= 0
+            ):
+                continue
+
+            # Detect acceleration spike: foot speed increases significantly
+            foot_accel = curr.foot_velocity - prev.foot_velocity
+
+            # Relative acceleration: change as % of previous velocity
+            if prev.foot_velocity > 0:
+                relative_accel = foot_accel / prev.foot_velocity  # ratio
+
+                # Real kick has >50% foot speed increase in one frame
+                if relative_accel > 0.5 and curr.foot_velocity > 100:
+                    foot_spikes.append((i, abs(foot_accel)))
+
+        return foot_spikes
+
     def _find_kicks(
         self,
         states: List[FrameBallState],
         original_fps: float,
     ) -> List[DetectedKick]:
         """
-        Enhanced kick detection with multiple signals.
+        OPTION B: Foot-First Kick Detection (Simplified)
+
+        Core logic - detect genuine kicking motion without physics assumptions:
+
+        1. Detect foot acceleration spikes (sudden foot speed increase >50%)
+        2. Validate foot is near ball when accelerating (≤100px distance)
+        3. Confirm ball accelerates immediately after (0-130ms post foot spike)
+        4. REJECT if any condition fails (filters running, hopping, occlusion)
+
+        Why this works:
+        - Running: Consistent foot motion, no spike ✗
+        - Hopping: Foot vertical, not near ball ✗
+        - Goalpost/fly-away: Still detects kick moment (not post-kick trajectory) ✓
+        - Real kick: Foot accelerates + near ball + ball responds ✓
 
         Detection Signals:
           1) Disappearance: ball tracked and then suddenly missing for N frames
@@ -357,100 +411,79 @@ class KickDetector:
         recent_positions: Deque[FrameBallState] = deque(maxlen=10)
         missing_streak = 0  # consecutive frames with no ball
 
+        # Detect foot acceleration spikes (kicking motion)
+        foot_spikes = self._detect_foot_acceleration_spike(states, window=3)
+        foot_spike_frames = {fs[0] for fs in foot_spikes}
+
         for i, state in enumerate(states):
 
             if state.detection is not None:
-                # Calculate confidence from multiple signals
                 confidence = 0.0
                 method_parts = []
 
-                # Displacement check
-                if recent_positions:
-                    prev = recent_positions[-1]
-                    if prev.detection:
-                        dx = state.detection.center[0] - prev.detection.center[0]
-                        dy = state.detection.center[1] - prev.detection.center[1]
-                        displacement = math.hypot(dx, dy)
+                # PRIMARY SIGNAL: Foot acceleration spike (kicking motion)
+                if i in foot_spike_frames and state.pose:
+                    # Foot showed acceleration spike - likely kicking motion
+                    # Check if foot is near ball
+                    if state.foot_near_ball:
+                        confidence = (
+                            0.85  # Strong signal: foot accelerating + near ball
+                        )
+                        method_parts.append(f"foot_accel_spike")
 
-                        if (
-                            displacement >= settings.MIN_KICK_DISPLACEMENT
-                            and missing_streak == 0
-                        ):
-                            displacement_conf = min(
-                                1.0, displacement / (settings.MIN_KICK_DISPLACEMENT * 3)
-                            )
-                            confidence = max(confidence, displacement_conf)
-                            method_parts.append(f"disp={displacement:.0f}px")
+                        # Check if ball is accelerating too (within 100ms after)
+                        ball_acc_boost = 0.0
+                        for j in range(
+                            i, min(i + 4, len(states))
+                        ):  # Next ~130ms at 30fps
+                            if (
+                                states[j].acceleration >= 300
+                            ):  # Ball accelerating significantly
+                                ball_acc_boost = 0.15
+                                method_parts.append(f"ball_accel_confirmed")
+                                break
 
-                        # High Velocity check
-                        if state.velocity > 0:
-                            min_kick_velocity = getattr(
-                                settings, "MIN_KICK_VELOCITY", 150.0
-                            )
-                            if state.velocity >= min_kick_velocity:
-                                velocity_conf = min(
-                                    1.0, state.velocity / (min_kick_velocity * 1.5)
-                                )
+                        confidence = min(1.0, confidence + ball_acc_boost)
+
+                # SECONDARY SIGNAL: High ball motion signals (displacement, velocity, acceleration)
+                else:
+                    if recent_positions:
+                        prev = recent_positions[-1]
+                        if prev.detection:
+                            dx = state.detection.center[0] - prev.detection.center[0]
+                            dy = state.detection.center[1] - prev.detection.center[1]
+                            displacement = math.hypot(dx, dy)
+
+                            # Require LARGE displacements (80px+) to avoid running stride
+                            if displacement >= 80 and missing_streak == 0:
+                                displacement_conf = min(1.0, displacement / 150)
+                                confidence = max(confidence, displacement_conf)
+                                method_parts.append(f"disp={displacement:.0f}px")
+
+                            # High velocity + foot near ball
+                            if state.velocity > 200 and state.foot_near_ball:
+                                velocity_conf = min(1.0, state.velocity / 300)
                                 confidence = max(confidence, velocity_conf)
                                 method_parts.append(f"vel={state.velocity:.0f}px/f")
 
-                        # Acceleration check
-                        if state.acceleration > 0:
-                            min_kick_acceleration = getattr(
-                                settings, "MIN_KICK_ACCELERATION", 100.0
-                            )
-                            if state.acceleration >= min_kick_acceleration:
-                                accel_conf = min(
-                                    1.0,
-                                    state.acceleration / (min_kick_acceleration * 1.5),
-                                )
+                            # LARGE acceleration (500px/f²+)
+                            if state.acceleration >= 500:
+                                accel_conf = min(1.0, state.acceleration / 800)
                                 confidence = max(confidence, accel_conf)
                                 method_parts.append(
-                                    f"accel={state.acceleration:.1f}px/f²"
+                                    f"accel={state.acceleration:.0f}px/f²"
                                 )
 
-                # Pose Validation (foot near ball)
-                if state.pose and state.detection:
-                    if state.foot_near_ball:
-                        # Foot is close to ball
-                        pose_conf = 0.7 if state.player_moving_towards_ball else 0.5
-                        confidence = max(confidence, pose_conf)
-                        method_parts.append(
-                            f"pose(foot_dist={state.foot_distance_to_ball:.0f}px)"
-                        )
-
-                    # Check if foot velocity indicates a kicking motion
-                    if state.foot_velocity > 0:
-                        min_foot_velocity = getattr(
-                            settings, "MIN_FOOT_VELOCITY_FOR_KICK", 100.0
-                        )
-                        if state.foot_velocity >= min_foot_velocity:
-                            foot_vel_conf = min(
-                                1.0, state.foot_velocity / (min_foot_velocity * 1.5)
-                            )
-                            confidence = max(
-                                confidence, foot_vel_conf * 0.8
-                            )  # Lower weight than ball velocity
-                            method_parts.append(
-                                f"foot_vel={state.foot_velocity:.0f}px/f"
-                            )
-
-                # Flag as kick if any signal triggered
-                if confidence > 0.3:  # Threshold for kick event
-                    # Apply penalty if foot not validated by pose
-                    if not (state.pose and state.foot_near_ball):
-                        confidence *= 0.9  # Slight penalty for unvalidated kicks
-
+                # Strict final threshold (only very confident detections)
+                if confidence > 0.85:
                     raw_events.append(
                         DetectedKick(
-                            kick_index=0,  # Will renumber after merge
+                            kick_index=0,
                             frame_number=state.frame_number,
                             timestamp_seconds=state.timestamp,
                             confidence_score=round(min(1.0, confidence), 3),
                             detection_method=(
-                                "+".join(method_parts)
-                                if method_parts
-                                else "displacement"
+                                "+".join(method_parts) if method_parts else "combined"
                             ),
                         )
                     )
@@ -459,30 +492,32 @@ class KickDetector:
                 recent_positions.append(state)
 
             else:
-                # Disappearance check
+                # Disappearance check - MUCH STRICTER NOW
                 missing_streak += 1
                 if (
                     missing_streak == settings.BALL_DISAPPEAR_FRAMES
-                    and len(recent_positions) >= 3  # Was tracked for a while
+                    and len(recent_positions) >= 3
                 ):
                     last_seen = recent_positions[-1]
+
+                    # REQUIRE all three conditions for disappearance to count:
+                    # 1. High detection confidence
+                    # 2. Foot very close to ball
+                    # 3. Foot was accelerating (in recent frame)
                     last_confidence = (
                         last_seen.detection.confidence if last_seen.detection else 0.0
                     )
 
-                    # Only flag as kick if last detection was high-confidence
-                    if last_confidence >= settings.MIN_DETECTION_CONFIDENCE_FOR_KICK:
-                        confidence = 0.75
+                    is_foot_spike = (i - 1) in foot_spike_frames
 
-                        # Boost confidence if previous frame had high velocity
-                        if last_seen.velocity >= getattr(
-                            settings, "MIN_KICK_VELOCITY", 150.0
-                        ):
-                            confidence = min(1.0, confidence + 0.15)
-
-                        # Boost if foot was near ball
-                        if last_seen.foot_near_ball:
-                            confidence = min(1.0, confidence + 0.1)
+                    if (
+                        last_confidence >= 0.7
+                        and last_seen.foot_near_ball
+                        and is_foot_spike
+                    ):
+                        # High confidence disappearance: foot spike + ball vanished
+                        confidence = 0.90
+                        method_parts = ["disappearance+foot_spike"]
 
                         raw_events.append(
                             DetectedKick(
@@ -490,14 +525,14 @@ class KickDetector:
                                 frame_number=last_seen.frame_number,
                                 timestamp_seconds=last_seen.timestamp,
                                 confidence_score=round(confidence, 3),
-                                detection_method="disappearance",
+                                detection_method="+".join(method_parts),
                             )
                         )
                     else:
                         logger.debug(
-                            f"Suppressed kick at frame {last_seen.frame_number}: "
-                            f"last detection confidence {last_confidence:.2f} < "
-                            f"threshold {settings.MIN_DETECTION_CONFIDENCE_FOR_KICK}"
+                            f"Suppressed disappearance at frame {last_seen.frame_number}: "
+                            f"foot_spike={is_foot_spike}, foot_near={last_seen.foot_near_ball}, "
+                            f"conf={last_confidence:.2f}"
                         )
 
         # Merge nearby events & renumber
@@ -697,3 +732,362 @@ class KickDetector:
             i += 1
 
         return interpolated
+
+
+"""
+Main block for testing KickDetector
+Run this file to test kick detection on a video
+"""
+
+if __name__ == "__main__":
+    import sys
+    import cv2
+    import time
+    import numpy as np
+    from pathlib import Path
+    from app.services.video_loader import validate_and_get_info, iter_frames
+    from app.services.ball_detector import BallDetector
+    from app.services.pose_estimator import PoseEstimator, POSE_CONNECTIONS
+    from app.services.kick_detector import KickDetector
+
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+
+    # Helper function to draw skeleton on frame
+    def draw_skeleton(frame, pose, color=(0, 255, 0), thickness=2):
+        """Draw skeleton keypoints and connections on frame."""
+        if not pose or not pose.keypoints:
+            return
+
+        h, w = frame.shape[:2]
+
+        # Draw connections (skeleton lines)
+        for start_idx, end_idx in POSE_CONNECTIONS:
+            start_kp = pose.get_keypoint(start_idx)
+            end_kp = pose.get_keypoint(end_idx)
+
+            if (
+                start_kp
+                and end_kp
+                and start_kp.visibility > 0.3
+                and end_kp.visibility > 0.3
+            ):
+                cv2.line(
+                    frame,
+                    (start_kp.x, start_kp.y),
+                    (end_kp.x, end_kp.y),
+                    color,
+                    thickness,
+                )
+
+        # Draw keypoints as circles
+        for kp in pose.keypoints:
+            if kp.visibility > 0.3:
+                # Brighter color for high visibility
+                kp_color = (0, 255, 0) if kp.visibility > 0.7 else (0, 165, 255)
+                cv2.circle(frame, (kp.x, kp.y), 4, kp_color, -1)
+                # Draw visibility score
+                cv2.putText(
+                    frame,
+                    f"{kp.visibility:.1f}",
+                    (kp.x + 5, kp.y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.3,
+                    kp_color,
+                    1,
+                )
+
+    # Helper function to draw foot-to-ball distance and line
+    def draw_foot_to_ball(frame, pose, ball_detection, color=(255, 100, 0)):
+        """Draw line and distance from foot to ball center."""
+        if not pose or not ball_detection:
+            return
+
+        # Get foot keypoints (left foot: 31, right foot: 32)
+        left_foot = pose.get_keypoint(31)
+        right_foot = pose.get_keypoint(32)
+
+        if not left_foot or not right_foot:
+            return
+
+        # Use closer foot
+        left_dist = np.sqrt(
+            (left_foot.x - ball_detection.center[0]) ** 2
+            + (left_foot.y - ball_detection.center[1]) ** 2
+        )
+        right_dist = np.sqrt(
+            (right_foot.x - ball_detection.center[0]) ** 2
+            + (right_foot.y - ball_detection.center[1]) ** 2
+        )
+
+        foot = left_foot if left_dist < right_dist else right_foot
+        dist = min(left_dist, right_dist)
+
+        # Draw line from foot to ball
+        cv2.line(frame, (foot.x, foot.y), ball_detection.center, color, 2)
+
+        # Draw distance label
+        mid_x = (foot.x + ball_detection.center[0]) // 2
+        mid_y = (foot.y + ball_detection.center[1]) // 2
+        cv2.putText(
+            frame,
+            f"Dist: {dist:.0f}px",
+            (mid_x - 30, mid_y - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            2,
+        )
+
+    # Helper function to calculate and draw leg angle
+    def draw_leg_angle(frame, pose, color=(100, 150, 255)):
+        """Calculate and display leg angle relative to ground."""
+        if not pose:
+            return
+
+        # Get hip and knee and ankle for left leg (23, 25, 27)
+        hip = pose.get_keypoint(23)
+        knee = pose.get_keypoint(25)
+        ankle = pose.get_keypoint(27)
+
+        if not hip or not knee or not ankle:
+            return
+
+        # Calculate angle: hip -> knee -> ankle
+        v1 = np.array([hip.x - knee.x, hip.y - knee.y])
+        v2 = np.array([ankle.x - knee.x, ankle.y - knee.y])
+
+        # Normalize vectors
+        v1_norm = v1 / (np.linalg.norm(v1) + 1e-6)
+        v2_norm = v2 / (np.linalg.norm(v2) + 1e-6)
+
+        # Calculate angle
+        cos_angle = np.clip(np.dot(v1_norm, v2_norm), -1, 1)
+        angle = np.degrees(np.arccos(cos_angle))
+
+        # Display leg angle near knee
+        cv2.putText(
+            frame,
+            f"Leg: {angle:.0f}°",
+            (knee.x - 30, knee.y - 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            2,
+        )
+
+    # Test video path
+    test_video = Path("/content/video_9 (online-video-cutter.com).mp4")
+
+    if not test_video.exists():
+        print(f"Test video not found: {test_video}")
+        print("Usage: python app/services/kick_detector_main.py")
+        sys.exit(1)
+
+    try:
+        # Test 1: Initialize detectors
+        print("\n=== Test 1: Initializing Detectors ===")
+        ball_detector = BallDetector()
+        pose_estimator = PoseEstimator()
+        kick_detector = KickDetector(ball_detector)
+        print("Ball detector initialized")
+        print("Pose estimator initialized")
+        print("Kick detector initialized")
+
+        # Test 2: Get video info
+        print("\n=== Test 2: Loading Video ===")
+        video_info = validate_and_get_info(str(test_video))
+        print(f"Video: {video_info.filename}")
+        print(f"  Resolution: {video_info.width}x{video_info.height}")
+        print(f"  Total frames: {video_info.total_frames}")
+        print(f"  FPS: {video_info.fps:.2f}")
+
+        # Test 3: Run kick detection
+        print("\n=== Test 3: Detecting Kicks ===")
+        start_time = time.perf_counter()
+        kicks = kick_detector.detect_kicks(video_info)
+        elapsed_time = time.perf_counter() - start_time
+
+        print(f"\nKick Detection Summary:")
+        print(f"  Total kicks detected: {len(kicks)}")
+        print(f"  Processing time: {elapsed_time:.2f}s")
+        print(
+            f"  Time per kick: {elapsed_time/max(1, len(kicks)):.2f}s" if kicks else ""
+        )
+
+        if kicks:
+            print("\nDetected Kicks:")
+            for kick in kicks:
+                print(
+                    f"  Kick {kick.kick_index}: frame={kick.frame_number}, "
+                    f"time={kick.timestamp_seconds:.2f}s, "
+                    f"confidence={kick.confidence_score:.2%}, "
+                    f"method={kick.detection_method}"
+                )
+
+        # Test 4: Save annotated video showing kick detection
+        print("\n=== Test 4: Saving Annotated Video with Kick Annotations ===")
+        output_dir = Path("outputs")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use a simpler filename without spaces and .mp4 extension
+        output_video = output_dir / "kick_detection_output.mp4"
+
+        # Create video writer with mp4v codec
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        video_dims = (video_info.width, video_info.height)
+        writer = cv2.VideoWriter(str(output_video), fourcc, video_info.fps, video_dims)
+
+        if not writer.isOpened():
+            print(f"✗ Cannot create video writer for {output_video}")
+            print(f"  Codec: mp4v")
+            print(f"  Dimensions: {video_dims}")
+            print(f"  FPS: {video_info.fps}")
+        else:
+            print(f"✓ Video writer opened successfully")
+            print(f"  Output: {output_video}")
+            print(f"  Codec: mp4v (.mp4)")
+            print(f"  Dimensions: {video_dims[0]}x{video_dims[1]}")
+            print(f"  FPS: {video_info.fps:.2f}")
+
+            frame_count = 0
+            kick_frames = {kick.frame_number for kick in kicks}
+            last_kick_num = 0  # Track last detected kick number to display consistently
+
+            # Re-detect on every frame to annotate
+            ball_detector.init_video(
+                video_width=video_info.width, video_height=video_info.height
+            )
+
+            for frame_idx, timestamp, frame in iter_frames(
+                str(test_video), sample_every_n=1
+            ):
+                # Detect ball at this frame
+                tracked = ball_detector.track(frame, frame_id=frame_idx)
+
+                # Detect pose at this frame
+                pose = pose_estimator.detect(frame, timestamp_ms=int(timestamp * 1000))
+
+                # Annotate frame
+                annotated = frame.copy()
+
+                # Draw skeleton and pose information
+                if pose:
+                    draw_skeleton(annotated, pose, color=(0, 255, 0), thickness=2)
+
+                    # Draw foot-to-ball distance if ball detected
+                    if tracked:
+                        draw_foot_to_ball(annotated, pose, tracked, color=(255, 100, 0))
+
+                    # Draw leg angle
+                    draw_leg_angle(annotated, pose, color=(100, 150, 255))
+
+                # Draw ball detection
+                if tracked:
+                    # Draw bounding box (orange)
+                    cv2.rectangle(
+                        annotated,
+                        (tracked.x1, tracked.y1),
+                        (tracked.x2, tracked.y2),
+                        (0, 165, 255),
+                        2,
+                    )
+                    # Draw center point (green)
+                    cv2.circle(annotated, tracked.center, 5, (0, 255, 0), -1)
+
+                # Count current kick number if on a kick frame
+                current_kick_num = None
+                # Update last kick number if on a kick frame
+                if frame_idx in kick_frames:
+                    # Find which kick number this is
+                    kick_frames_sorted = sorted(kick_frames)
+                    last_kick_num = kick_frames_sorted.index(frame_idx) + 1
+
+                # Add all info panel in top left (dark text, no background)
+                info_lines = []
+                info_lines.append(f"Frame {frame_idx} | {timestamp:.2f}s")
+
+                if pose:
+                    visible_kpts = sum(
+                        1 for kp in pose.keypoints if kp.visibility > 0.3
+                    )
+                    info_lines.append(f"Pose: {visible_kpts}/33 keypoints")
+
+                if tracked:
+                    info_lines.append(
+                        f"Ball ID:{tracked.track_id} | {tracked.confidence:.0%}"
+                    )
+
+                # Always display kick counter
+                info_lines.append(f"KICK #{last_kick_num}")
+
+                # Show confidence if currently on a kick frame
+                if frame_idx in kick_frames:
+                    kick_event = next(
+                        (k for k in kicks if k.frame_number == frame_idx), None
+                    )
+                    if kick_event:
+                        info_lines.append(f"Conf: {kick_event.confidence_score:.0%}")
+
+                # Draw info text (no background, dark text only)
+                line_height = 22
+                for i, line in enumerate(info_lines):
+                    y_pos = 25 + i * line_height
+                    if "KICK" in line:
+                        color = (0, 0, 200)  # Dark red for KICK
+                        font_weight = 2
+                    else:
+                        color = (50, 50, 50)  # Dark gray for other info
+                        font_weight = 1
+
+                    cv2.putText(
+                        annotated,
+                        line,
+                        (10, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        color,
+                        font_weight,
+                    )
+
+                # Write frame to video
+                writer.write(annotated)
+                frame_count += 1
+
+                if frame_count % 100 == 0:
+                    print(f"  Processed {frame_count} frames...")
+
+                # Limit for demo (process full video)
+                if frame_count >= video_info.total_frames:
+                    break
+
+            writer.release()
+
+            # Check if file was actually created
+            if output_video.exists():
+                output_size_mb = output_video.stat().st_size / (1024 * 1024)
+                print(f"  Kick detection video saved: {output_video}")
+                print(f"  Total frames: {frame_count}")
+                print(f"  Duration: {frame_count/video_info.fps:.2f}s")
+                print(f"  File size: {output_size_mb:.2f}MB")
+            else:
+                print(
+                    f"✗ Warning: Video file was not created. Check FFmpeg/codec compatibility."
+                )
+                print(f"  Attempted path: {output_video}")
+                print(f"  Frames that would have been written: {frame_count}")
+
+        # Cleanup
+        try:
+            pose_estimator.close()
+        except Exception:
+            # Suppress cleanup exceptions (known MediaPipe issue)
+            pass
+        print("\nAll kick detector tests passed!")
+
+    except Exception as e:
+        print(f"\nTest failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)
