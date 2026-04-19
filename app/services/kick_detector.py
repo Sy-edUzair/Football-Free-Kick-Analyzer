@@ -82,10 +82,8 @@ class KickDetector:
         """Scan the video and return all confirmed kick events."""
         logger.info(f"Starting kick detection: {video_info.filename}")
 
-        sample_every = max(1, int(video_info.fps / settings.PROCESSING_FPS))
-        logger.info(
-            f"Sampling every {sample_every} frame(s) (~{settings.PROCESSING_FPS} fps)"
-        )
+        # sample_every = max(1, int(video_info.fps / settings.PROCESSING_FPS))
+        logger.info(f"Sampling every 1 frame(s) (~{settings.PROCESSING_FPS} fps)")
 
         try:
             logger.debug(
@@ -101,7 +99,7 @@ class KickDetector:
 
         logger.debug(f"Starting frame iteration for {video_info.path}...")
         for frame_idx, timestamp, frame in iter_frames(
-            video_info.path, sample_every_n=sample_every
+            video_info.path, sample_every_n=1
         ):
             logger.debug(f"[Frame {frame_idx}] Processing...")
 

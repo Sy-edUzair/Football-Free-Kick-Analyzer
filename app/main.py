@@ -23,7 +23,6 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.CLIPS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_DIR, exist_ok=True)
     logger.info(f"Output directory: {settings.OUTPUT_DIR}")
-    logger.info(f"Clips directory:  {settings.CLIPS_DIR}")
     logger.info(f"Temp directory:   {settings.TEMP_DIR}")
     yield
     # Shutdown
@@ -44,7 +43,6 @@ app = FastAPI(
 )
 
 
-app.mount("/clips", StaticFiles(directory=settings.CLIPS_DIR), name="clips")
 app.mount("/outputs", StaticFiles(directory=settings.OUTPUT_DIR), name="outputs")
 
 app.include_router(router, prefix="/api/v2")

@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     DEBUG: bool = Field(default=False)
 
     OUTPUT_DIR: str = Field(default="outputs")
-    CLIPS_DIR: str = Field(default="clips")
     TEMP_DIR: str = Field(default="temp")
     MAX_VIDEO_SIZE_MB: int = Field(default=500)
 

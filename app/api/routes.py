@@ -13,8 +13,6 @@ All business logic lives in the services layer.
 
 import logging
 import os
-import shutil
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -55,9 +53,11 @@ def _get_video_annotator():
         )
     return _video_annotator
 
+
 SUPPORTED_MIME_TYPES = {
-    "video/mp4", "video/avi", "video/quicktime",
-    "video/x-msvideo", "video/x-matroska", "video/webm",
+    "video/mp4",
+    "video/avi",
+    "video/webm",
 }
 
 
@@ -65,7 +65,10 @@ SUPPORTED_MIME_TYPES = {
     "/analyze/clips",
     response_model=AnalysisResponse,
     responses={
-        400: {"model": ErrorResponse, "description": "Bad request (invalid video, unsupported format, etc.)"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Bad request (invalid video, unsupported format, etc.)",
+        },
         413: {"model": ErrorResponse, "description": "File too large"},
         422: {"model": ErrorResponse, "description": "No kicks detected"},
         500: {"model": ErrorResponse, "description": "Internal processing error"},
@@ -81,23 +84,21 @@ SUPPORTED_MIME_TYPES = {
     tags=["Analysis"],
 )
 async def analyze_video_clips(
-    video: UploadFile = File(..., description="Football free-kick video file (.mp4, .avi, .mov, .mkv)"),
+    video: UploadFile = File(
+        ..., description="Football free-kick video file (.mp4, .avi, .mov, .mkv)"
+    ),
 ):
     """
     POST /api/v1/analyze/clips
 
     Detects kicks and returns a merged video containing all annotated clips.
     This is the recommended mode for getting individual kick clips merged into one file.
-    
+
     Body: multipart/form-data with field `video`
     """
-    # ── 1. Basic content-type check ───────────────────────────────────────────
     if video.content_type and video.content_type not in SUPPORTED_MIME_TYPES:
-        # Be lenient — some clients send generic types. Log but don't block.
         logger.warning(f"Unexpected content-type: {video.content_type}")
 
-    # ── 2. Size check before saving ───────────────────────────────────────────
-    # We read in chunks to avoid loading the whole file into memory
     temp_dir = settings.TEMP_DIR
     os.makedirs(temp_dir, exist_ok=True)
 
@@ -109,7 +110,7 @@ async def analyze_video_clips(
         max_bytes = settings.MAX_VIDEO_SIZE_MB * 1024 * 1024
 
         with open(temp_path, "wb") as f:
-            while chunk := await video.read(1024 * 1024):  # 1 MB chunks
+            while chunk := await video.read(1024 * 1024):
                 total_bytes += len(chunk)
                 if total_bytes > max_bytes:
                     raise VideoTooLargeError(
@@ -117,9 +118,10 @@ async def analyze_video_clips(
                     )
                 f.write(chunk)
 
-        logger.info(f"Saved upload: {video.filename} → {temp_path} ({total_bytes/1024/1024:.1f} MB)")
+        logger.info(
+            f"Saved upload: {video.filename} → {temp_path} ({total_bytes/1024/1024:.1f} MB)"
+        )
 
-        # ── 3. Run the analysis pipeline with clip merging ──────────────────────
         result = await _pipeline.run(temp_path)
         return result
 
@@ -131,17 +133,29 @@ async def analyze_video_clips(
     except UnsupportedFormatError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error_code": "UNSUPPORTED_FORMAT", "message": exc.message, "detail": exc.detail},
+            detail={
+                "error_code": "UNSUPPORTED_FORMAT",
+                "message": exc.message,
+                "detail": exc.detail,
+            },
         )
     except VideoLoadError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error_code": "VIDEO_LOAD_ERROR", "message": exc.message, "detail": exc.detail},
+            detail={
+                "error_code": "VIDEO_LOAD_ERROR",
+                "message": exc.message,
+                "detail": exc.detail,
+            },
         )
     except NoKicksDetectedError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error_code": "NO_KICKS_DETECTED", "message": exc.message, "detail": exc.detail},
+            detail={
+                "error_code": "NO_KICKS_DETECTED",
+                "message": exc.message,
+                "detail": exc.detail,
+            },
         )
     except ModelLoadError as exc:
         logger.critical(f"Model load failure: {exc}")
@@ -153,16 +167,22 @@ async def analyze_video_clips(
         logger.error(f"Pipeline error: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error_code": "PROCESSING_ERROR", "message": exc.message, "detail": exc.detail},
+            detail={
+                "error_code": "PROCESSING_ERROR",
+                "message": exc.message,
+                "detail": exc.detail,
+            },
         )
     except Exception as exc:
         logger.exception(f"Unexpected error during analysis: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error_code": "INTERNAL_ERROR", "message": "An unexpected error occurred."},
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "An unexpected error occurred.",
+            },
         )
     finally:
-        # Always clean up the temp file
         if os.path.exists(temp_path):
             os.remove(temp_path)
             logger.debug(f"Cleaned up temp file: {temp_path}")
@@ -171,7 +191,10 @@ async def analyze_video_clips(
 @router.post(
     "/analyze/full-annotation",
     responses={
-        400: {"model": ErrorResponse, "description": "Bad request (invalid video, unsupported format, etc.)"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Bad request (invalid video, unsupported format, etc.)",
+        },
         413: {"model": ErrorResponse, "description": "File too large"},
         422: {"model": ErrorResponse, "description": "No kicks detected"},
         500: {"model": ErrorResponse, "description": "Internal processing error"},
@@ -187,21 +210,21 @@ async def analyze_video_clips(
     tags=["Analysis"],
 )
 async def analyze_video_full_annotation(
-    video: UploadFile = File(..., description="Football free-kick video file (.mp4, .avi, .mov, .mkv)"),
+    video: UploadFile = File(
+        ..., description="Football free-kick video file (.mp4, .avi, .mov, .mkv)"
+    ),
 ):
     """
     POST /api/v1/analyze/full-annotation
 
     Annotates the entire video with pose, ball detection, and metrics.
     Use this when you want to inspect the entire video for detections, not just clips around kicks.
-    
+
     Body: multipart/form-data with field `video`
     """
-    # ── 1. Basic content-type check ───────────────────────────────────────────
     if video.content_type and video.content_type not in SUPPORTED_MIME_TYPES:
         logger.warning(f"Unexpected content-type: {video.content_type}")
 
-    # ── 2. Size check before saving ───────────────────────────────────────────
     temp_dir = settings.TEMP_DIR
     os.makedirs(temp_dir, exist_ok=True)
 
@@ -221,9 +244,10 @@ async def analyze_video_full_annotation(
                     )
                 f.write(chunk)
 
-        logger.info(f"Saved upload: {video.filename} → {temp_path} ({total_bytes/1024/1024:.1f} MB)")
+        logger.info(
+            f"Saved upload: {video.filename} → {temp_path} ({total_bytes/1024/1024:.1f} MB)"
+        )
 
-        # ── 3. Run the full video annotation ───────────────────────────────────
         annotator = _get_video_annotator()
         result = annotator.annotate_full_video(temp_path)
         return JSONResponse(content=result)
@@ -236,17 +260,29 @@ async def analyze_video_full_annotation(
     except UnsupportedFormatError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error_code": "UNSUPPORTED_FORMAT", "message": exc.message, "detail": exc.detail},
+            detail={
+                "error_code": "UNSUPPORTED_FORMAT",
+                "message": exc.message,
+                "detail": exc.detail,
+            },
         )
     except VideoLoadError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error_code": "VIDEO_LOAD_ERROR", "message": exc.message, "detail": exc.detail},
+            detail={
+                "error_code": "VIDEO_LOAD_ERROR",
+                "message": exc.message,
+                "detail": exc.detail,
+            },
         )
     except NoKicksDetectedError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error_code": "NO_KICKS_DETECTED", "message": exc.message, "detail": exc.detail},
+            detail={
+                "error_code": "NO_KICKS_DETECTED",
+                "message": exc.message,
+                "detail": exc.detail,
+            },
         )
     except ModelLoadError as exc:
         logger.critical(f"Model load failure: {exc}")
@@ -258,48 +294,26 @@ async def analyze_video_full_annotation(
         logger.error(f"Full annotation error: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error_code": "PROCESSING_ERROR", "message": exc.message, "detail": exc.detail},
+            detail={
+                "error_code": "PROCESSING_ERROR",
+                "message": exc.message,
+                "detail": exc.detail,
+            },
         )
     except Exception as exc:
         logger.exception(f"Unexpected error during full annotation: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error_code": "INTERNAL_ERROR", "message": "An unexpected error occurred."},
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "An unexpected error occurred.",
+            },
         )
     finally:
         # Always clean up the temp file
         if os.path.exists(temp_path):
             os.remove(temp_path)
             logger.debug(f"Cleaned up temp file: {temp_path}")
-
-
-# ── Backward compatibility endpoint ────────────────────────────────────────────
-@router.post(
-    "/analyze",
-    response_model=AnalysisResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad request"},
-        413: {"model": ErrorResponse, "description": "File too large"},
-        422: {"model": ErrorResponse, "description": "No kicks detected"},
-        500: {"model": ErrorResponse, "description": "Internal processing error"},
-    },
-    summary="[DEPRECATED] Analyze a free-kick video",
-    description="Deprecated: Use /api/v1/analyze/clips instead. This endpoint is an alias for backward compatibility.",
-    tags=["Analysis"],
-    deprecated=True,
-)
-async def analyze_video_legacy(
-    video: UploadFile = File(..., description="Football free-kick video file (.mp4, .avi, .mov, .mkv)"),
-):
-    """
-    POST /api/v1/analyze
-    
-    DEPRECATED: This endpoint is maintained for backward compatibility.
-    Please use /api/v1/analyze/clips instead.
-    
-    Delegates to /api/v1/analyze/clips.
-    """
-    return await analyze_video_clips(video)
 
 
 @router.get(
@@ -317,7 +331,9 @@ async def list_clips():
         {
             "filename": f,
             "url": f"/clips/{f}",
-            "size_mb": round(os.path.getsize(os.path.join(clips_dir, f)) / (1024 * 1024), 2),
+            "size_mb": round(
+                os.path.getsize(os.path.join(clips_dir, f)) / (1024 * 1024), 2
+            ),
         }
         for f in sorted(os.listdir(clips_dir))
         if f.endswith(".mp4")
