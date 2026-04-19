@@ -1,8 +1,3 @@
-"""
-Centralized configuration — all tunable parameters live here.
-Avoids hardcoding values throughout the codebase.
-"""
-
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import List
