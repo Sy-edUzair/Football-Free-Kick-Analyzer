@@ -181,17 +181,15 @@ class FrameAnnotator:
         ball_velocity = self._metrics.get("ball_velocity", 0.0)
         foot_velocity = self._metrics.get("foot_velocity", 0.0)
         displacement_from_foot = self._metrics.get("displacement_from_foot", float("inf"))
-        leg_angle = self._metrics.get("leg_angle", 0.0)
         
-        # Handle infinity display
-        foot_ball_str = f"{displacement_from_foot:.0f}" if displacement_from_foot != float("inf") else "∞"
+        # Handle infinity display (use "inf" instead of ∞ for OpenCV compatibility)
+        foot_ball_str = f"{displacement_from_foot:.0f}" if displacement_from_foot != float("inf") else "inf"
         
         # Background panel (semi-transparent)
         metrics_text = [
             f"Ball Vel: {ball_velocity:.0f} px/s",
             f"Foot Vel: {foot_velocity:.0f} px/s",
             f"Foot-Ball: {foot_ball_str} px",
-            f"Leg Angle: {leg_angle:.1f}°"
         ]
         
         panel_height = len(metrics_text) * line_height + 8

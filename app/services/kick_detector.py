@@ -524,7 +524,6 @@ if __name__ == "__main__":
     from app.services.video_loader import validate_and_get_info, iter_frames
     from app.services.ball_detector import BallDetector
     from app.services.pose_estimator import PoseEstimator, POSE_CONNECTIONS
-    from app.services.kick_detector import KickDetector
 
     logging.basicConfig(level=logging.INFO)
 

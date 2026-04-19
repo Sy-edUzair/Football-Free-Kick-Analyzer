@@ -131,7 +131,9 @@ class ClipExtractor:
 
             # Run detectors
             ball = self._ball_detector.detect(frame)
-            pose = self._pose_estimator.detect(frame, timestamp_ms=int(timestamp * 1000))
+            pose = self._pose_estimator.detect(
+                frame, timestamp_ms=int(timestamp * 1000)
+            )
 
             if ball:
                 ball_detections += 1
@@ -148,7 +150,7 @@ class ClipExtractor:
 
             # Compute metrics using FrameBallState pattern from kick_detector
             metrics = {}
-            
+
             # Ball motion metrics
             if prev_state and ball and prev_state.detection:
                 dt = state.timestamp - prev_state.timestamp
@@ -185,35 +187,6 @@ class ClipExtractor:
                             foot_dy = closest_foot[1] - prev_state.foot_screen_pos[1]
                             state.foot_velocity = math.hypot(foot_dx, foot_dy) / dt
                             metrics["foot_velocity"] = state.foot_velocity
-
-                # Leg angle from hip-knee-ankle
-                angles = []
-                hip_l = pose.get_keypoint(23)
-                knee_l = pose.get_keypoint(25)
-                ankle_l = pose.get_keypoint(27)
-                if hip_l and knee_l and ankle_l and all(kp.visibility > 0.5 for kp in [hip_l, knee_l, ankle_l]):
-                    v1 = (hip_l.x - knee_l.x, hip_l.y - knee_l.y)
-                    v2 = (ankle_l.x - knee_l.x, ankle_l.y - knee_l.y)
-                    cos_angle = (v1[0] * v2[0] + v1[1] * v2[1]) / (
-                        math.hypot(v1[0], v1[1]) * math.hypot(v2[0], v2[1]) + 1e-6
-                    )
-                    cos_angle = max(-1, min(1, cos_angle))
-                    angles.append(math.degrees(math.acos(cos_angle)))
-
-                hip_r = pose.get_keypoint(24)
-                knee_r = pose.get_keypoint(26)
-                ankle_r = pose.get_keypoint(28)
-                if hip_r and knee_r and ankle_r and all(kp.visibility > 0.5 for kp in [hip_r, knee_r, ankle_r]):
-                    v1 = (hip_r.x - knee_r.x, hip_r.y - knee_r.y)
-                    v2 = (ankle_r.x - knee_r.x, ankle_r.y - knee_r.y)
-                    cos_angle = (v1[0] * v2[0] + v1[1] * v2[1]) / (
-                        math.hypot(v1[0], v1[1]) * math.hypot(v2[0], v2[1]) + 1e-6
-                    )
-                    cos_angle = max(-1, min(1, cos_angle))
-                    angles.append(math.degrees(math.acos(cos_angle)))
-
-                if angles:
-                    metrics["leg_angle"] = sum(angles) / len(angles)
 
             # Annotate and write
             annotated = annotator.annotate(frame, ball, pose, timestamp, metrics)
