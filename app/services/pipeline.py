@@ -1,10 +1,18 @@
 """
 Analysis Pipeline — the orchestrator.
 
-This is the single entry point for a full analysis run.  It wires together
+This is the single entry point for a full analysis run. It wires together
 all the individual services in the correct order:
 
-  VideoLoader → KickDetector → ClipExtractor → AnalysisResponse
+  VideoLoader → KickDetector → ClipExtractor → VideoMerger → AnalysisResponse
+
+Workflow:
+  1. Load & validate video (VideoLoader)
+  2. Detect kicks in video (KickDetector)
+  3. Extract & annotate individual clips (ClipExtractor)
+  4. Merge all clips into single video (VideoMerger)
+  5. Clean up temporary files
+  6. Return merged video path in response
 
 Why have a separate pipeline class?
   The FastAPI route handler should be thin (handle HTTP concerns only).
@@ -16,6 +24,7 @@ import time
 import math
 import os
 import cv2
+import shutil
 from datetime import datetime
 from typing import Optional
 
@@ -31,6 +40,7 @@ from app.services.ball_detector import BallDetector
 from app.services.pose_estimator import PoseEstimator
 from app.services.kick_detector import KickDetector, FrameBallState
 from app.services.clip_extractor import ClipExtractor
+from app.services.video_merger import VideoMerger
 from app.services.annotator import FrameAnnotator
 
 logger = logging.getLogger(__name__)
@@ -273,8 +283,10 @@ class AnalysisPipeline:
         Steps:
           1. Load & validate video
           2. Detect kicks
-          3. Extract & annotate clips
-          4. Build response
+          3. Extract & annotate clips to temporary directory
+          4. Merge all clips into a single video
+          5. Clean up temporary clips
+          6. Build response with merged video path
         """
         start_time = time.perf_counter()
         logger.info(f"Pipeline started for: {video_path}")
@@ -316,13 +328,32 @@ class AnalysisPipeline:
             for k in detected_kicks
         ]
 
-        #  Extract & annotate clips
+        # Step 3: Extract & annotate clips to temporary directory
+        logger.info("Step 3: Extracting and annotating clips...")
+        temp_clips_dir = os.path.join(settings.TEMP_DIR, f"clips_{os.urandom(4).hex()}")
         extractor = ClipExtractor(
             ball_detector=ball_detector,
             pose_estimator=pose_estimator,
-            output_dir=settings.CLIPS_DIR,
+            output_dir=temp_clips_dir,
         )
         clip_details = extractor.extract_all(video_info, detected_kicks)
+
+        # Step 4: Merge all clips into a single video
+        logger.info("Step 4: Merging clips into single video...")
+        clip_paths = [detail.clip_path for detail in clip_details]
+        merger = VideoMerger(output_dir=settings.OUTPUT_DIR)
+        merged_filename = f"merged_kicks_{os.urandom(4).hex()}.mp4"
+        merged_video_path = merger.merge_clips(clip_paths, merged_filename)
+
+        # Step 5: Clean up temporary clips and directory
+        logger.info("Step 5: Cleaning up temporary files...")
+        try:
+            merger.cleanup_clips(clip_paths)
+            if os.path.exists(temp_clips_dir):
+                shutil.rmtree(temp_clips_dir)
+                logger.debug(f"Deleted temporary directory: {temp_clips_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up temp files: {e}")
 
         #  Build response
         elapsed = round(time.perf_counter() - start_time, 2)
@@ -332,12 +363,14 @@ class AnalysisPipeline:
 
         return AnalysisResponse(
             success=True,
-            message=f"Analysis complete. Detected {len(detected_kicks)} kick(s).",
+            message=f"Analysis complete. Detected {len(detected_kicks)} kick(s) and merged into single video.",
             analyzed_at=datetime.utcnow(),
             video_metadata=video_metadata,
             total_kicks_detected=len(detected_kicks),
             kick_events=kick_events,
             clips=clip_details,
+            merged_video_path=merged_video_path,
+            merged_video_filename=merged_filename,
             processing_time_seconds=elapsed,
         )
 
@@ -352,83 +385,90 @@ if __name__ == "__main__":
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
-    # async def test_pipeline():
-    #     """Test the full analysis pipeline."""
-    #     # Try to find a test video
-    #     test_video = None
-    #     candidates = [
-    #         Path("dataset/test_video.mp4"),
-    #         Path("test_video.mp4"),
-    #         Path("/content/video_9.mp4"),
-    #     ]
+    async def test_pipeline():
+        """Test the full analysis pipeline with clip merging."""
+        # Try to find a test video
+        test_video = None
+        candidates = [
+            Path("dataset/test_video.mp4"),
+            Path("test_video.mp4"),
+            Path("/content/video_9.mp4"),
+        ]
 
-    #     for candidate in candidates:
-    #         if candidate.exists():
-    #             test_video = str(candidate)
-    #             break
+        for candidate in candidates:
+            if candidate.exists():
+                test_video = str(candidate)
+                break
 
-    #     if not test_video:
-    #         print("Test video not found. Tried:")
-    #         for c in candidates:
-    #             print(f"  - {c}")
-    #         sys.exit(1)
+        if not test_video:
+            print("Test video not found. Tried:")
+            for c in candidates:
+                print(f"  - {c}")
+            return
 
-    #     print(f"\n{'='*60}")
-    #     print(f"Testing Pipeline with: {test_video}")
-    #     print(f"{'='*60}\n")
+        print(f"\n{'='*60}")
+        print(f"Testing Full Analysis Pipeline with Merger")
+        print(f"Testing with: {test_video}")
+        print(f"{'='*60}\n")
 
-    #     try:
-    #         pipeline = AnalysisPipeline()
-    #         result = await pipeline.run(test_video)
+        try:
+            pipeline = AnalysisPipeline()
+            result = await pipeline.run(test_video)
 
-    #         print(f"\n{'='*60}")
-    #         print("✓ PIPELINE TEST PASSED")
-    #         print(f"{'='*60}")
-    #         print(f"Message: {result.message}")
-    #         print(f"Kicks Detected: {result.total_kicks_detected}")
-    #         print(f"Processing Time: {result.processing_time_seconds}s")
-    #         print(f"\nVideo Metadata:")
-    #         print(f"  Filename: {result.video_metadata.filename}")
-    #         print(f"  Duration: {result.video_metadata.duration_seconds}s")
-    #         print(f"  FPS: {result.video_metadata.fps}")
-    #         print(
-    #             f"  Resolution: {result.video_metadata.width}x{result.video_metadata.height}"
-    #         )
-    #         print(f"  Total Frames: {result.video_metadata.total_frames}")
-    #         print(f"  File Size: {result.video_metadata.file_size_mb} MB")
+            print(f"\n{'='*60}")
+            print("✓ FULL ANALYSIS PIPELINE TEST PASSED")
+            print(f"{'='*60}")
+            print(f"Message: {result.message}")
+            print(f"Kicks Detected: {result.total_kicks_detected}")
+            print(f"Processing Time: {result.processing_time_seconds}s")
+            print(f"\nVideo Metadata:")
+            print(f"  Filename: {result.video_metadata.filename}")
+            print(f"  Duration: {result.video_metadata.duration_seconds}s")
+            print(f"  FPS: {result.video_metadata.fps}")
+            print(
+                f"  Resolution: {result.video_metadata.width}x{result.video_metadata.height}"
+            )
+            print(f"  Total Frames: {result.video_metadata.total_frames}")
+            print(f"  File Size: {result.video_metadata.file_size_mb} MB")
 
-    #         if result.kick_events:
-    #             print(f"\nKick Events:")
-    #             for kick in result.kick_events:
-    #                 print(
-    #                     f"  Kick #{kick.kick_index}: "
-    #                     f"frame={kick.frame_number}, "
-    #                     f"time={kick.timestamp_seconds}s, "
-    #                     f"confidence={kick.confidence_score:.2f}"
-    #                 )
+            if result.kick_events:
+                print(f"\nKick Events:")
+                for kick in result.kick_events:
+                    print(
+                        f"  Kick #{kick.kick_index}: "
+                        f"frame={kick.frame_number}, "
+                        f"time={kick.timestamp_seconds}s, "
+                        f"confidence={kick.confidence_score:.2f}"
+                    )
 
-    #         if result.clips:
-    #             print(f"\nGenerated Clips:")
-    #             for clip in result.clips:
-    #                 print(
-    #                     f"  Clip {clip.kick_index}: "
-    #                     f"{clip.clip_filename} "
-    #                     f"({clip.frame_count} frames, "
-    #                     f"ball={clip.ball_detections}, "
-    #                     f"pose={clip.pose_detections})"
-    #                 )
+            if result.clips:
+                print(f"\nGenerated Individual Clips:")
+                for clip in result.clips:
+                    print(
+                        f"  Clip {clip.kick_index}: "
+                        f"{clip.clip_filename} "
+                        f"({clip.frame_count} frames, "
+                        f"ball={clip.ball_detections}, "
+                        f"pose={clip.pose_detections})"
+                    )
 
-    #         print(f"\n{'='*60}\n")
+            if result.merged_video_path:
+                print(f"\nMERGED VIDEO (Single Output):")
+                print(f"  Path: {result.merged_video_path}")
+                print(f"  Filename: {result.merged_video_filename}")
+                print(f"  → All clips automatically merged into ONE video!")
 
-    #     except Exception as exc:
-    #         import traceback
+            print(f"\n{'='*60}\n")
 
-    #         print(f"\n{'='*60}")
-    #         print("✗ PIPELINE TEST FAILED")
-    #         print(f"{'='*60}")
-    #         print(f"Error: {exc}\n")
-    #         traceback.print_exc()
-    #         sys.exit(1)
+        except Exception as exc:
+            import traceback
+
+            print(f"\n{'='*60}")
+            print("✗ FULL ANALYSIS PIPELINE TEST FAILED")
+            print(f"{'='*60}")
+            print(f"Error: {exc}\n")
+            traceback.print_exc()
+            sys.exit(1)
 
     async def test_full_video_annotation():
         """Test annotating the full video without clipping."""
@@ -511,5 +551,5 @@ if __name__ == "__main__":
     print("RUNNING PIPELINE TESTS")
     print("=" * 60)
 
-    # asyncio.run(test_pipeline())
-    asyncio.run(test_full_video_annotation())
+    asyncio.run(test_pipeline())
+    # asyncio.run(test_full_video_annotation())

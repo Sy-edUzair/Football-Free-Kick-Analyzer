@@ -65,6 +65,14 @@ class AnalysisResponse(BaseModel):
     total_kicks_detected: int
     kick_events: List[KickEvent]
     clips: List[ClipDetail]
+    merged_video_path: Optional[str] = Field(
+        default=None,
+        description="Path to the merged video containing all annotated clips"
+    )
+    merged_video_filename: Optional[str] = Field(
+        default=None,
+        description="Filename of the merged video"
+    )
     processing_time_seconds: float
 
 

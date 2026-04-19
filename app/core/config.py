@@ -12,7 +12,6 @@ import os
 class Settings(BaseSettings):
     APP_PORT: int = Field(default=8000)
     DEBUG: bool = Field(default=False)
-    ALLOWED_ORIGINS: List[str] = Field(default=["*"])
 
     OUTPUT_DIR: str = Field(default="outputs")
     CLIPS_DIR: str = Field(default="clips")
