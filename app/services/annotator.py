@@ -1,6 +1,7 @@
 import cv2
 import logging
 import numpy as np
+import math
 from collections import deque
 from typing import Optional, Deque, Tuple
 
@@ -20,7 +21,7 @@ class FrameAnnotator:
 
     Usage:
         annotator = FrameAnnotator(kick_index=1)
-        annotated = annotator.annotate(frame, ball_det, pose_det, timestamp)
+        annotated = annotator.annotate(frame, ball_det, pose_det, timestamp, metrics)
     """
 
     def __init__(self, kick_index: int):
@@ -30,6 +31,9 @@ class FrameAnnotator:
             maxlen=settings.TRAJECTORY_MAX_POINTS
         )
         self.last_track_id = None  # For displaying track ID
+        
+        # Current metrics to display (set during annotate call)
+        self._metrics = None
 
     def annotate(
         self,
@@ -37,6 +41,7 @@ class FrameAnnotator:
         ball: Optional[BallDetection],
         pose: Optional[PoseDetection],
         timestamp: float,
+        metrics: Optional[dict] = None,
     ) -> np.ndarray:
         """
         Apply all overlays to a copy of the frame and return the result.
@@ -46,11 +51,16 @@ class FrameAnnotator:
             ball:      Ball detection result, or None.
             pose:      Pose detection result, or None.
             timestamp: Current time in the original video.
+            metrics:   Dict with keys: ball_velocity, foot_velocity, 
+                      displacement_from_foot, leg_angle (all optional).
 
         Returns:
             Annotated BGR frame (same size).
         """
         out = frame.copy()
+
+        # Store metrics for drawing
+        self._metrics = metrics or {}
 
         if ball is not None:
             self._trajectory.append(ball.center)
@@ -63,6 +73,7 @@ class FrameAnnotator:
             self._draw_keypoints(out, pose)
 
         self._draw_hud(out, timestamp, ball, pose)
+        self._draw_metrics_panel(out, pose)
 
         return out
 
@@ -147,6 +158,62 @@ class FrameAnnotator:
             1,
             cv2.LINE_AA,
         )
+
+    def _draw_metrics_panel(self, frame: np.ndarray, pose: Optional[PoseDetection]):
+        """
+        Draw kick metrics panel in top-left corner with clean formatting.
+        Shows: ball velocity, foot velocity, foot-ball distance, leg angle
+        """
+        h, w = frame.shape[:2]
+        
+        # Only show metrics if we have pose data and metrics were provided
+        if pose is None or not self._metrics:
+            return
+        
+        # Panel dimensions
+        panel_x = 8
+        panel_y = 44  # Below the main HUD
+        line_height = 20
+        font_scale = 0.4
+        thickness = 1
+        
+        # Extract metrics with defaults
+        ball_velocity = self._metrics.get("ball_velocity", 0.0)
+        foot_velocity = self._metrics.get("foot_velocity", 0.0)
+        displacement_from_foot = self._metrics.get("displacement_from_foot", float("inf"))
+        leg_angle = self._metrics.get("leg_angle", 0.0)
+        
+        # Handle infinity display
+        foot_ball_str = f"{displacement_from_foot:.0f}" if displacement_from_foot != float("inf") else "∞"
+        
+        # Background panel (semi-transparent)
+        metrics_text = [
+            f"Ball Vel: {ball_velocity:.0f} px/s",
+            f"Foot Vel: {foot_velocity:.0f} px/s",
+            f"Foot-Ball: {foot_ball_str} px",
+            f"Leg Angle: {leg_angle:.1f}°"
+        ]
+        
+        panel_height = len(metrics_text) * line_height + 8
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (panel_x - 4, panel_y - 4), 
+                     (panel_x + 180, panel_y + panel_height), 
+                     (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.4, frame, 0.6, 0, frame)
+        
+        # Draw each metric line
+        for idx, text in enumerate(metrics_text):
+            y = panel_y + idx * line_height + 14
+            cv2.putText(
+                frame,
+                text,
+                (panel_x, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                settings.TEXT_COLOR,
+                thickness,
+                cv2.LINE_AA,
+            )
 
     @staticmethod
     def _put_label(frame: np.ndarray, text: str, x: int, y: int, color: tuple):

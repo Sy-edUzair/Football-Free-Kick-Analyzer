@@ -131,3 +131,95 @@ class AnalysisPipeline:
             clips=clip_details,
             processing_time_seconds=elapsed,
         )
+
+
+if __name__ == "__main__":
+    import asyncio
+    import sys
+    from pathlib import Path
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    async def test_pipeline():
+        """Test the full analysis pipeline."""
+        # Try to find a test video
+        test_video = None
+        candidates = [
+            Path("dataset/test_video.mp4"),
+            Path("test_video.mp4"),
+            Path("/content/video_9.mp4"),
+        ]
+
+        for candidate in candidates:
+            if candidate.exists():
+                test_video = str(candidate)
+                break
+
+        if not test_video:
+            print("Test video not found. Tried:")
+            for c in candidates:
+                print(f"  - {c}")
+            sys.exit(1)
+
+        print(f"\n{'='*60}")
+        print(f"Testing Pipeline with: {test_video}")
+        print(f"{'='*60}\n")
+
+        try:
+            pipeline = AnalysisPipeline()
+            result = await pipeline.run(test_video)
+
+            print(f"\n{'='*60}")
+            print("✓ PIPELINE TEST PASSED")
+            print(f"{'='*60}")
+            print(f"Message: {result.message}")
+            print(f"Kicks Detected: {result.total_kicks_detected}")
+            print(f"Processing Time: {result.processing_time_seconds}s")
+            print(f"\nVideo Metadata:")
+            print(f"  Filename: {result.video_metadata.filename}")
+            print(f"  Duration: {result.video_metadata.duration_seconds}s")
+            print(f"  FPS: {result.video_metadata.fps}")
+            print(
+                f"  Resolution: {result.video_metadata.width}x{result.video_metadata.height}"
+            )
+            print(f"  Total Frames: {result.video_metadata.total_frames}")
+            print(f"  File Size: {result.video_metadata.file_size_mb} MB")
+
+            if result.kick_events:
+                print(f"\nKick Events:")
+                for kick in result.kick_events:
+                    print(
+                        f"  Kick #{kick.kick_index}: "
+                        f"frame={kick.frame_number}, "
+                        f"time={kick.timestamp_seconds}s, "
+                        f"confidence={kick.confidence_score:.2f}"
+                    )
+
+            if result.clips:
+                print(f"\nGenerated Clips:")
+                for clip in result.clips:
+                    print(
+                        f"  Clip {clip.kick_index}: "
+                        f"{clip.clip_filename} "
+                        f"({clip.frame_count} frames, "
+                        f"ball={clip.ball_detections}, "
+                        f"pose={clip.pose_detections})"
+                    )
+
+            print(f"\n{'='*60}\n")
+
+        except Exception as exc:
+            import traceback
+
+            print(f"\n{'='*60}")
+            print("✗ PIPELINE TEST FAILED")
+            print(f"{'='*60}")
+            print(f"Error: {exc}\n")
+            traceback.print_exc()
+            sys.exit(1)
+
+    # Run the async test
+    asyncio.run(test_pipeline())
