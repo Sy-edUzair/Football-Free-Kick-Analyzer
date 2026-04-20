@@ -228,7 +228,7 @@ def read_frame_at(video_path: str, frame_number: int):
 #             print(f"  Preprocessed: 1280x1280 ({output_size_mb:.2f}MB)")
 #             print(f"  Total frames saved: {frames_saved}")
 
-#         print("\n✅ All tests passed!")
+#         print("\nAll tests passed!")
 
 #     except Exception as e:
 #         print(f"\nTest failed: {e}")

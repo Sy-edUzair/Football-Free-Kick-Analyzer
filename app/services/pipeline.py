@@ -37,6 +37,7 @@ from app.services.ball_detector import BallDetector
 from app.services.pose_estimator import PoseEstimator
 from app.services.kick_detector import KickDetector, FrameBallState
 from app.services.clip_extractor import ClipExtractor
+from app.services.cloudinary_uploader import CloudinaryUploader
 from app.services.annotator import FrameAnnotator
 
 logger = logging.getLogger(__name__)
@@ -130,9 +131,15 @@ class VideoAnnotator:
         )
         logger.info(f"  Video saved: {output_path}")
 
-        # Step 4: Build response
+        # Step 4: Upload full annotated video to Cloudinary
+        logger.info("Step 4: Uploading full annotated video to Cloudinary...")
+        uploader = CloudinaryUploader()
+        cloud_url = uploader.upload_full_video(output_path)
+        logger.info("  Cloud URL generated for full video")
+
+        # Step 5: Build response
         elapsed = round(time.perf_counter() - start_time, 2)
-        logger.info(f"Step 4: Building response...")
+        logger.info(f"Step 5: Building response...")
         logger.info(f"  Pipeline complete in {elapsed}s")
 
         response = {
@@ -157,6 +164,7 @@ class VideoAnnotator:
                 for k in detected_kicks
             ],
             "annotated_video_path": output_path,
+            "annotated_video_cloud_url": cloud_url,
             "annotated_video_filename": output_filename,
             "processing_time_seconds": elapsed,
         }
@@ -268,11 +276,13 @@ class AnalysisPipeline:
         """
         Execute the full pipeline and return a structured response.
 
-        Steps:
-          1. Load & validate video
-          2. Detect kicks
-          3. Extract & annotate clips directly to outputs directory
-          4. Build response with individual clips metadata
+                Steps:
+                    1. Load & validate video
+                    2. Detect kicks
+                    3. Extract & annotate clips into local clips directory
+                    4. Upload clips to Cloudinary and replace paths with cloud URLs
+                    5. Clean up local clip files
+                    6. Build response with cloud URLs
         """
         start_time = time.perf_counter()
         logger.info(f"Pipeline started for: {video_path}")
@@ -314,15 +324,34 @@ class AnalysisPipeline:
             for k in detected_kicks
         ]
 
-        # Step 3: Extract & annotate clips directly to outputs directory
+        # Step 3: Extract & annotate clips to local clips directory
         logger.info("Step 3: Extracting and annotating clips...")
-        clips_output_dir = os.path.join(settings.OUTPUT_DIR, "clips")
+        clips_dir = settings.CLIPS_DIR
+        os.makedirs(clips_dir, exist_ok=True)
         extractor = ClipExtractor(
             ball_detector=ball_detector,
             pose_estimator=pose_estimator,
-            output_dir=clips_output_dir,
+            output_dir=clips_dir,
         )
         clip_details = extractor.extract_all(video_info, detected_kicks)
+
+        # Step 4: Upload clips to Cloudinary and replace local paths with URLs
+        logger.info("Step 4: Uploading clips to Cloudinary...")
+        uploader = CloudinaryUploader()
+        cloud_clip_details = []
+
+        for clip in clip_details:
+            cloud_url = uploader.upload_clip(clip.clip_path)
+            cloud_clip_details.append(clip.model_copy(update={"clip_path": cloud_url}))
+
+        # Step 5: Clean up local clip files
+        logger.info("Step 5: Cleaning up local clip files...")
+        try:
+            for clip in clip_details:
+                if os.path.exists(clip.clip_path):
+                    os.remove(clip.clip_path)
+        except Exception as exc:
+            logger.warning("Failed to clean up local clip files: %s", exc)
 
         #  Build response
         elapsed = round(time.perf_counter() - start_time, 2)
@@ -332,185 +361,185 @@ class AnalysisPipeline:
 
         return AnalysisResponse(
             success=True,
-            message=f"Analysis complete. Detected {len(detected_kicks)} kick(s) and generated individual clips.",
+            message=f"Analysis complete. Detected {len(detected_kicks)} kick(s) and uploaded individual clips to Cloudinary.",
             analyzed_at=datetime.utcnow(),
             video_metadata=video_metadata,
             total_kicks_detected=len(detected_kicks),
             kick_events=kick_events,
-            clips=clip_details,
+            clips=cloud_clip_details,
             processing_time_seconds=elapsed,
         )
 
 
-if __name__ == "__main__":
-    import asyncio
-    import sys
-    from pathlib import Path
+# if __name__ == "__main__":
+#     import asyncio
+#     import sys
+#     from pathlib import Path
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+#     logging.basicConfig(
+#         level=logging.INFO,
+#         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+#     )
 
-    async def test_pipeline():
-        """Test the full analysis pipeline with individual clip output."""
-        # Try to find a test video
-        test_video = None
-        candidates = [
-            Path("dataset/test_video.mp4"),
-            Path("test_video.mp4"),
-            Path("/content/video_9.mp4"),
-        ]
+#     async def test_pipeline():
+#         """Test the full analysis pipeline with individual clip output."""
+#         # Try to find a test video
+#         test_video = None
+#         candidates = [
+#             Path("dataset/test_video.mp4"),
+#             Path("test_video.mp4"),
+#             Path("/content/video_9.mp4"),
+#         ]
 
-        for candidate in candidates:
-            if candidate.exists():
-                test_video = str(candidate)
-                break
+#         for candidate in candidates:
+#             if candidate.exists():
+#                 test_video = str(candidate)
+#                 break
 
-        if not test_video:
-            print("Test video not found. Tried:")
-            for c in candidates:
-                print(f"  - {c}")
-            return
+#         if not test_video:
+#             print("Test video not found. Tried:")
+#             for c in candidates:
+#                 print(f"  - {c}")
+#             return
 
-        print(f"\n{'='*60}")
-        print(f"Testing Full Analysis Pipeline")
-        print(f"Testing with: {test_video}")
-        print(f"{'='*60}\n")
+#         print(f"\n{'='*60}")
+#         print(f"Testing Full Analysis Pipeline")
+#         print(f"Testing with: {test_video}")
+#         print(f"{'='*60}\n")
 
-        try:
-            pipeline = AnalysisPipeline()
-            result = await pipeline.run(test_video)
+#         try:
+#             pipeline = AnalysisPipeline()
+#             result = await pipeline.run(test_video)
 
-            print(f"\n{'='*60}")
-            print("✓ FULL ANALYSIS PIPELINE TEST PASSED")
-            print(f"{'='*60}")
-            print(f"Message: {result.message}")
-            print(f"Kicks Detected: {result.total_kicks_detected}")
-            print(f"Processing Time: {result.processing_time_seconds}s")
-            print(f"\nVideo Metadata:")
-            print(f"  Filename: {result.video_metadata.filename}")
-            print(f"  Duration: {result.video_metadata.duration_seconds}s")
-            print(f"  FPS: {result.video_metadata.fps}")
-            print(
-                f"  Resolution: {result.video_metadata.width}x{result.video_metadata.height}"
-            )
-            print(f"  Total Frames: {result.video_metadata.total_frames}")
-            print(f"  File Size: {result.video_metadata.file_size_mb} MB")
+#             print(f"\n{'='*60}")
+#             print("✓ FULL ANALYSIS PIPELINE TEST PASSED")
+#             print(f"{'='*60}")
+#             print(f"Message: {result.message}")
+#             print(f"Kicks Detected: {result.total_kicks_detected}")
+#             print(f"Processing Time: {result.processing_time_seconds}s")
+#             print(f"\nVideo Metadata:")
+#             print(f"  Filename: {result.video_metadata.filename}")
+#             print(f"  Duration: {result.video_metadata.duration_seconds}s")
+#             print(f"  FPS: {result.video_metadata.fps}")
+#             print(
+#                 f"  Resolution: {result.video_metadata.width}x{result.video_metadata.height}"
+#             )
+#             print(f"  Total Frames: {result.video_metadata.total_frames}")
+#             print(f"  File Size: {result.video_metadata.file_size_mb} MB")
 
-            if result.kick_events:
-                print(f"\nKick Events:")
-                for kick in result.kick_events:
-                    print(
-                        f"  Kick #{kick.kick_index}: "
-                        f"frame={kick.frame_number}, "
-                        f"time={kick.timestamp_seconds}s, "
-                        f"confidence={kick.confidence_score:.2f}"
-                    )
+#             if result.kick_events:
+#                 print(f"\nKick Events:")
+#                 for kick in result.kick_events:
+#                     print(
+#                         f"  Kick #{kick.kick_index}: "
+#                         f"frame={kick.frame_number}, "
+#                         f"time={kick.timestamp_seconds}s, "
+#                         f"confidence={kick.confidence_score:.2f}"
+#                     )
 
-            if result.clips:
-                print(f"\nGenerated Individual Clips:")
-                for clip in result.clips:
-                    print(
-                        f"  Clip {clip.kick_index}: "
-                        f"{clip.clip_filename} "
-                        f"({clip.frame_count} frames, "
-                        f"ball={clip.ball_detections}, "
-                        f"pose={clip.pose_detections})"
-                    )
+#             if result.clips:
+#                 print(f"\nGenerated Individual Clips:")
+#                 for clip in result.clips:
+#                     print(
+#                         f"  Clip {clip.kick_index}: "
+#                         f"{clip.clip_filename} "
+#                         f"({clip.frame_count} frames, "
+#                         f"ball={clip.ball_detections}, "
+#                         f"pose={clip.pose_detections})"
+#                     )
 
-            print(f"\n{'='*60}\n")
+#             print(f"\n{'='*60}\n")
 
-        except Exception as exc:
-            import traceback
+#         except Exception as exc:
+#             import traceback
 
-            print(f"\n{'='*60}")
-            print("✗ FULL ANALYSIS PIPELINE TEST FAILED")
-            print(f"{'='*60}")
-            print(f"Error: {exc}\n")
-            traceback.print_exc()
-            sys.exit(1)
+#             print(f"\n{'='*60}")
+#             print("✗ FULL ANALYSIS PIPELINE TEST FAILED")
+#             print(f"{'='*60}")
+#             print(f"Error: {exc}\n")
+#             traceback.print_exc()
+#             sys.exit(1)
 
-    async def test_full_video_annotation():
-        """Test annotating the full video without clipping."""
-        test_video = None
-        candidates = [
-            Path("dataset/test_video.mp4"),
-            Path("test_video.mp4"),
-            Path("/content/video_9.mp4"),
-        ]
+#     async def test_full_video_annotation():
+#         """Test annotating the full video without clipping."""
+#         test_video = None
+#         candidates = [
+#             Path("dataset/test_video.mp4"),
+#             Path("test_video.mp4"),
+#             Path("/content/video_9.mp4"),
+#         ]
 
-        for candidate in candidates:
-            if candidate.exists():
-                test_video = str(candidate)
-                break
+#         for candidate in candidates:
+#             if candidate.exists():
+#                 test_video = str(candidate)
+#                 break
 
-        if not test_video:
-            print("Test video not found for annotation test.")
-            return
+#         if not test_video:
+#             print("Test video not found for annotation test.")
+#             return
 
-        print(f"\n{'='*60}")
-        print(f"Testing Full Video Annotation Pipeline")
-        print(f"{'='*60}\n")
+#         print(f"\n{'='*60}")
+#         print(f"Testing Full Video Annotation Pipeline")
+#         print(f"{'='*60}\n")
 
-        try:
-            ball_detector, pose_estimator = _get_detectors()
+#         try:
+#             ball_detector, pose_estimator = _get_detectors()
 
-            annotator = VideoAnnotator(
-                ball_detector=ball_detector,
-                pose_estimator=pose_estimator,
-                output_dir=settings.OUTPUT_DIR,
-            )
+#             annotator = VideoAnnotator(
+#                 ball_detector=ball_detector,
+#                 pose_estimator=pose_estimator,
+#                 output_dir=settings.OUTPUT_DIR,
+#             )
 
-            response = annotator.annotate_full_video(test_video)
+#             response = annotator.annotate_full_video(test_video)
 
-            print(f"\n{'='*60}")
-            print("FULL VIDEO ANNOTATION PIPELINE PASSED")
-            print(f"{'='*60}")
-            print(f"Message: {response['message']}")
-            print(f"Processing Time: {response['processing_time_seconds']}s")
-            print(f"\nVideo Metadata:")
-            vm = response["video_metadata"]
-            print(f"  Filename: {vm['filename']}")
-            print(f"  Duration: {vm['duration_seconds']}s")
-            print(f"  FPS: {vm['fps']}")
-            print(f"  Resolution: {vm['width']}x{vm['height']}")
-            print(f"  Total Frames: {vm['total_frames']}")
-            print(f"  File Size: {vm['file_size_mb']} MB")
+#             print(f"\n{'='*60}")
+#             print("FULL VIDEO ANNOTATION PIPELINE PASSED")
+#             print(f"{'='*60}")
+#             print(f"Message: {response['message']}")
+#             print(f"Processing Time: {response['processing_time_seconds']}s")
+#             print(f"\nVideo Metadata:")
+#             vm = response["video_metadata"]
+#             print(f"  Filename: {vm['filename']}")
+#             print(f"  Duration: {vm['duration_seconds']}s")
+#             print(f"  FPS: {vm['fps']}")
+#             print(f"  Resolution: {vm['width']}x{vm['height']}")
+#             print(f"  Total Frames: {vm['total_frames']}")
+#             print(f"  File Size: {vm['file_size_mb']} MB")
 
-            if response["kick_events"]:
-                print(f"\nKick Events Detected:")
-                for kick in response["kick_events"]:
-                    print(
-                        f"  Kick #{kick['kick_index']}: "
-                        f"frame={kick['frame_number']}, "
-                        f"time={kick['timestamp_seconds']}s, "
-                        f"confidence={kick['confidence_score']:.2f}"
-                    )
+#             if response["kick_events"]:
+#                 print(f"\nKick Events Detected:")
+#                 for kick in response["kick_events"]:
+#                     print(
+#                         f"  Kick #{kick['kick_index']}: "
+#                         f"frame={kick['frame_number']}, "
+#                         f"time={kick['timestamp_seconds']}s, "
+#                         f"confidence={kick['confidence_score']:.2f}"
+#                     )
 
-            print(f"\nAnnotated Video:")
-            print(f"  Path: {response['annotated_video_path']}")
-            print(f"  Filename: {response['annotated_video_filename']}")
-            print(f"\nYou can now view this video to inspect:")
-            print(f"  - Ball detection & trajectory")
-            print(f"  - Pose skeleton & keypoints")
-            print(f"  - Metrics panel (ball velocity, foot velocity, etc.)")
-            print(f"\n{'='*60}\n")
+#             print(f"\nAnnotated Video:")
+#             print(f"  Path: {response['annotated_video_path']}")
+#             print(f"  Filename: {response['annotated_video_filename']}")
+#             print(f"\nYou can now view this video to inspect:")
+#             print(f"  - Ball detection & trajectory")
+#             print(f"  - Pose skeleton & keypoints")
+#             print(f"  - Metrics panel (ball velocity, foot velocity, etc.)")
+#             print(f"\n{'='*60}\n")
 
-        except Exception as exc:
-            import traceback
+#         except Exception as exc:
+#             import traceback
 
-            print(f"\n{'='*60}")
-            print("FULL VIDEO ANNOTATION PIPELINE FAILED")
-            print(f"{'='*60}")
-            print(f"Error: {exc}\n")
-            traceback.print_exc()
-            sys.exit(1)
+#             print(f"\n{'='*60}")
+#             print("FULL VIDEO ANNOTATION PIPELINE FAILED")
+#             print(f"{'='*60}")
+#             print(f"Error: {exc}\n")
+#             traceback.print_exc()
+#             sys.exit(1)
 
-    # Run both tests
-    print("\n" + "=" * 60)
-    print("RUNNING PIPELINE TESTS")
-    print("=" * 60)
+#     # Run both tests
+#     print("\n" + "=" * 60)
+#     print("RUNNING PIPELINE TESTS")
+#     print("=" * 60)
 
-    asyncio.run(test_pipeline())
-    # asyncio.run(test_full_video_annotation())
+#     asyncio.run(test_pipeline())
+#     # asyncio.run(test_full_video_annotation())

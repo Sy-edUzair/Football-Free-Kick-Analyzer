@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
-from typing import List
+from typing import List, Optional
 import os
 
 
@@ -9,8 +9,18 @@ class Settings(BaseSettings):
     DEBUG: bool = Field(default=False)
 
     OUTPUT_DIR: str = Field(default="outputs")
+    CLIPS_DIR: str = Field(default="clips")
     TEMP_DIR: str = Field(default="temp")
     MAX_VIDEO_SIZE_MB: int = Field(default=500)
+
+    # Cloudinary settings for storing generated clips remotely
+    CLOUDINARY_CLOUD_NAME: Optional[str] = Field(default=None)
+    CLOUDINARY_API_KEY: Optional[str] = Field(default=None)
+    CLOUDINARY_API_SECRET: Optional[str] = Field(default=None)
+    CLOUDINARY_FOLDER: str = Field(default="freekick_analyzer/clips")
+    CLOUDINARY_FULL_VIDEO_FOLDER: str = Field(
+        default="freekick_analyzer/full_annotated_videos"
+    )
 
     # Frames per second to sample when detecting kicks
     PROCESSING_FPS: int = Field(default=30)

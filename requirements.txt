@@ -2,16 +2,19 @@ absl-py==2.4.0
 aiofiles==25.1.0
 annotated-doc==0.0.4
 annotated-types==0.7.0
+antlr4-python3-runtime==4.9.3
 anyio==4.13.0
 certifi==2026.2.25
 cffi==2.0.0
 charset-normalizer==3.4.7
 click==8.3.2
+cloudinary==1.44.2
 contourpy==1.3.3
 cuda-bindings==13.2.0
 cuda-pathfinder==1.5.3
 cuda-toolkit==13.0.2
 cycler==0.12.1
+decord==0.6.0
 fastapi==0.136.0
 filelock==3.28.0
 flatbuffers==25.12.19
@@ -19,9 +22,12 @@ fonttools==4.62.1
 fsspec==2026.3.0
 h11==0.16.0
 httptools==0.7.1
+hydra-core==1.3.2
 idna==3.11
+iopath==0.1.10
 Jinja2==3.1.6
 kiwisolver==1.5.0
+lap==0.5.13
 MarkupSafe==3.0.3
 matplotlib==3.10.8
 mediapipe==0.10.33
@@ -43,12 +49,14 @@ nvidia-nccl-cu13==2.28.9
 nvidia-nvjitlink==13.0.88
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.0.85
+omegaconf==2.3.0
 opencv-contrib-python==4.13.0.92
 opencv-python==4.13.0.92
 packaging==26.1
 pillow==12.2.0
 polars==1.39.3
 polars-runtime-32==1.39.3
+portalocker==3.2.0
 psutil==7.2.2
 pycparser==3.0
 pydantic==2.13.2
@@ -60,7 +68,9 @@ python-dotenv==1.2.2
 python-multipart==0.0.26
 PyYAML==6.0.3
 requests==2.33.1
+SAM-2 @ git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4
 scipy==1.17.1
+segment-anything==1.0
 setuptools==81.0.0
 six==1.17.0
 sounddevice==0.5.5
@@ -68,6 +78,7 @@ starlette==1.0.0
 sympy==1.14.0
 torch==2.11.0
 torchvision==0.26.0
+tqdm==4.67.3
 triton==3.6.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0

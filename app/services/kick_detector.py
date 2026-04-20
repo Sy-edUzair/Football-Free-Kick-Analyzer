@@ -573,173 +573,173 @@ class KickDetector:
             logger.debug("Frame %5d | %.2fs | ball not found", frame_idx, timestamp)
 
 
-if __name__ == "__main__":
-    import sys
-    import cv2
-    import time
-    import numpy as np
-    from pathlib import Path
-    from app.services.video_loader import validate_and_get_info, iter_frames
-    from app.services.ball_detector import BallDetector
-    from app.services.pose_estimator import PoseEstimator, POSE_CONNECTIONS
+# if __name__ == "__main__":
+#     import sys
+#     import cv2
+#     import time
+#     import numpy as np
+#     from pathlib import Path
+#     from app.services.video_loader import validate_and_get_info, iter_frames
+#     from app.services.ball_detector import BallDetector
+#     from app.services.pose_estimator import PoseEstimator, POSE_CONNECTIONS
 
-    logging.basicConfig(level=logging.INFO)
+#     logging.basicConfig(level=logging.INFO)
 
-    # ---- drawing helpers ------------------------------------------------
+#     # ---- drawing helpers ------------------------------------------------
 
-    def draw_skeleton(frame, pose, color=(0, 255, 0), thickness=2):
-        if not pose or not pose.keypoints:
-            return
-        for start_idx, end_idx in POSE_CONNECTIONS:
-            s = pose.get_keypoint(start_idx)
-            e = pose.get_keypoint(end_idx)
-            if s and e and s.visibility > 0.3 and e.visibility > 0.3:
-                cv2.line(frame, (s.x, s.y), (e.x, e.y), color, thickness)
-        for kp in pose.keypoints:
-            if kp.visibility > 0.3:
-                c = (0, 255, 0) if kp.visibility > 0.7 else (0, 165, 255)
-                cv2.circle(frame, (kp.x, kp.y), 4, c, -1)
+#     def draw_skeleton(frame, pose, color=(0, 255, 0), thickness=2):
+#         if not pose or not pose.keypoints:
+#             return
+#         for start_idx, end_idx in POSE_CONNECTIONS:
+#             s = pose.get_keypoint(start_idx)
+#             e = pose.get_keypoint(end_idx)
+#             if s and e and s.visibility > 0.3 and e.visibility > 0.3:
+#                 cv2.line(frame, (s.x, s.y), (e.x, e.y), color, thickness)
+#         for kp in pose.keypoints:
+#             if kp.visibility > 0.3:
+#                 c = (0, 255, 0) if kp.visibility > 0.7 else (0, 165, 255)
+#                 cv2.circle(frame, (kp.x, kp.y), 4, c, -1)
 
-    def draw_foot_to_ball(frame, pose, ball_detection, color=(255, 100, 0)):
-        if not pose or not ball_detection:
-            return
-        lf = pose.get_keypoint(31)
-        rf = pose.get_keypoint(32)
-        if not lf or not rf:
-            return
-        ld = math.hypot(
-            lf.x - ball_detection.center[0], lf.y - ball_detection.center[1]
-        )
-        rd = math.hypot(
-            rf.x - ball_detection.center[0], rf.y - ball_detection.center[1]
-        )
-        foot = lf if ld < rd else rf
-        dist = min(ld, rd)
-        cv2.line(frame, (foot.x, foot.y), ball_detection.center, color, 2)
-        mid = (
-            (foot.x + ball_detection.center[0]) // 2,
-            (foot.y + ball_detection.center[1]) // 2,
-        )
-        cv2.putText(
-            frame,
-            f"Dist:{dist:.0f}px",
-            (mid[0] - 30, mid[1] - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            color,
-            1,
-        )
+#     def draw_foot_to_ball(frame, pose, ball_detection, color=(255, 100, 0)):
+#         if not pose or not ball_detection:
+#             return
+#         lf = pose.get_keypoint(31)
+#         rf = pose.get_keypoint(32)
+#         if not lf or not rf:
+#             return
+#         ld = math.hypot(
+#             lf.x - ball_detection.center[0], lf.y - ball_detection.center[1]
+#         )
+#         rd = math.hypot(
+#             rf.x - ball_detection.center[0], rf.y - ball_detection.center[1]
+#         )
+#         foot = lf if ld < rd else rf
+#         dist = min(ld, rd)
+#         cv2.line(frame, (foot.x, foot.y), ball_detection.center, color, 2)
+#         mid = (
+#             (foot.x + ball_detection.center[0]) // 2,
+#             (foot.y + ball_detection.center[1]) // 2,
+#         )
+#         cv2.putText(
+#             frame,
+#             f"Dist:{dist:.0f}px",
+#             (mid[0] - 30, mid[1] - 10),
+#             cv2.FONT_HERSHEY_SIMPLEX,
+#             0.45,
+#             color,
+#             1,
+#         )
 
-    test_video = Path("/content/video_9 (online-video-cutter.com).mp4")
-    if not test_video.exists():
-        print(f"Test video not found: {test_video}")
-        sys.exit(1)
+#     test_video = Path("/content/video_9 (online-video-cutter.com).mp4")
+#     if not test_video.exists():
+#         print(f"Test video not found: {test_video}")
+#         sys.exit(1)
 
-    try:
-        print("\n=== Initialising detectors ===")
-        ball_detector = BallDetector()
-        pose_estimator = PoseEstimator()
-        kick_detector = KickDetector(ball_detector)
+#     try:
+#         print("\n=== Initialising detectors ===")
+#         ball_detector = BallDetector()
+#         pose_estimator = PoseEstimator()
+#         kick_detector = KickDetector(ball_detector)
 
-        print("\n=== Loading video ===")
-        video_info = validate_and_get_info(str(test_video))
-        print(
-            f"  {video_info.filename}  {video_info.width}x{video_info.height} "
-            f"@ {video_info.fps:.2f}fps  ({video_info.total_frames} frames)"
-        )
+#         print("\n=== Loading video ===")
+#         video_info = validate_and_get_info(str(test_video))
+#         print(
+#             f"  {video_info.filename}  {video_info.width}x{video_info.height} "
+#             f"@ {video_info.fps:.2f}fps  ({video_info.total_frames} frames)"
+#         )
 
-        print("\n=== Detecting kicks ===")
-        t0 = time.perf_counter()
-        kicks = kick_detector.detect_kicks(video_info)
-        elapsed = time.perf_counter() - t0
-        print(f"  {len(kicks)} kick(s) found in {elapsed:.2f}s")
-        for k in kicks:
-            print(
-                f"  Kick {k.kick_index}: frame={k.frame_number}, "
-                f"t={k.timestamp_seconds:.2f}s, conf={k.confidence_score:.0%}, "
-                f"method={k.detection_method}"
-            )
+#         print("\n=== Detecting kicks ===")
+#         t0 = time.perf_counter()
+#         kicks = kick_detector.detect_kicks(video_info)
+#         elapsed = time.perf_counter() - t0
+#         print(f"  {len(kicks)} kick(s) found in {elapsed:.2f}s")
+#         for k in kicks:
+#             print(
+#                 f"  Kick {k.kick_index}: frame={k.frame_number}, "
+#                 f"t={k.timestamp_seconds:.2f}s, conf={k.confidence_score:.0%}, "
+#                 f"method={k.detection_method}"
+#             )
 
-        print("\n=== Saving annotated video ===")
-        output_dir = Path("outputs")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_video = output_dir / "kick_detection_output.mp4"
+#         print("\n=== Saving annotated video ===")
+#         output_dir = Path("outputs")
+#         output_dir.mkdir(parents=True, exist_ok=True)
+#         output_video = output_dir / "kick_detection_output.mp4"
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(
-            str(output_video),
-            fourcc,
-            video_info.fps,
-            (video_info.width, video_info.height),
-        )
+#         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+#         writer = cv2.VideoWriter(
+#             str(output_video),
+#             fourcc,
+#             video_info.fps,
+#             (video_info.width, video_info.height),
+#         )
 
-        kick_frames = {k.frame_number: k for k in kicks}
-        last_kick_label = ""
-        ball_detector.init_video(video_path=video_info.path)
+#         kick_frames = {k.frame_number: k for k in kicks}
+#         last_kick_label = ""
+#         ball_detector.init_video(video_path=video_info.path)
 
-        for frame_idx, timestamp, frame in iter_frames(
-            str(test_video), sample_every_n=1
-        ):
-            tracked = ball_detector.track(frame, frame_id=frame_idx)
-            pose = pose_estimator.detect(frame, timestamp_ms=int(timestamp * 1000))
+#         for frame_idx, timestamp, frame in iter_frames(
+#             str(test_video), sample_every_n=1
+#         ):
+#             tracked = ball_detector.track(frame, frame_id=frame_idx)
+#             pose = pose_estimator.detect(frame, timestamp_ms=int(timestamp * 1000))
 
-            annotated = frame.copy()
-            if pose:
-                draw_skeleton(annotated, pose)
-                if tracked:
-                    draw_foot_to_ball(annotated, pose, tracked)
+#             annotated = frame.copy()
+#             if pose:
+#                 draw_skeleton(annotated, pose)
+#                 if tracked:
+#                     draw_foot_to_ball(annotated, pose, tracked)
 
-            if tracked:
-                cv2.rectangle(
-                    annotated,
-                    (tracked.x1, tracked.y1),
-                    (tracked.x2, tracked.y2),
-                    (0, 165, 255),
-                    2,
-                )
-                cv2.circle(annotated, tracked.center, 5, (0, 255, 0), -1)
+#             if tracked:
+#                 cv2.rectangle(
+#                     annotated,
+#                     (tracked.x1, tracked.y1),
+#                     (tracked.x2, tracked.y2),
+#                     (0, 165, 255),
+#                     2,
+#                 )
+#                 cv2.circle(annotated, tracked.center, 5, (0, 255, 0), -1)
 
-            if frame_idx in kick_frames:
-                k = kick_frames[frame_idx]
-                last_kick_label = f"KICK #{k.kick_index}  {k.confidence_score:.0%}"
+#             if frame_idx in kick_frames:
+#                 k = kick_frames[frame_idx]
+#                 last_kick_label = f"KICK #{k.kick_index}  {k.confidence_score:.0%}"
 
-            lines = [f"Frame {frame_idx} | {timestamp:.2f}s"]
-            if tracked:
-                lines.append(f"Ball conf={tracked.confidence:.0%}")
-            if last_kick_label:
-                lines.append(last_kick_label)
+#             lines = [f"Frame {frame_idx} | {timestamp:.2f}s"]
+#             if tracked:
+#                 lines.append(f"Ball conf={tracked.confidence:.0%}")
+#             if last_kick_label:
+#                 lines.append(last_kick_label)
 
-            for row, line in enumerate(lines):
-                is_kick = "KICK" in line
-                cv2.putText(
-                    annotated,
-                    line,
-                    (10, 25 + row * 22),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 0, 200) if is_kick else (50, 50, 50),
-                    2 if is_kick else 1,
-                )
+#             for row, line in enumerate(lines):
+#                 is_kick = "KICK" in line
+#                 cv2.putText(
+#                     annotated,
+#                     line,
+#                     (10, 25 + row * 22),
+#                     cv2.FONT_HERSHEY_SIMPLEX,
+#                     0.5,
+#                     (0, 0, 200) if is_kick else (50, 50, 50),
+#                     2 if is_kick else 1,
+#                 )
 
-            writer.write(annotated)
-            if frame_idx >= video_info.total_frames:
-                break
+#             writer.write(annotated)
+#             if frame_idx >= video_info.total_frames:
+#                 break
 
-        writer.release()
-        if output_video.exists():
-            size_mb = output_video.stat().st_size / 1024 / 1024
-            print(f"  Saved: {output_video} ({size_mb:.1f} MB)")
-        else:
-            print("  Warning: output file not created.")
+#         writer.release()
+#         if output_video.exists():
+#             size_mb = output_video.stat().st_size / 1024 / 1024
+#             print(f"  Saved: {output_video} ({size_mb:.1f} MB)")
+#         else:
+#             print("  Warning: output file not created.")
 
-    except Exception as exc:
-        import traceback
+#     except Exception as exc:
+#         import traceback
 
-        print(f"\nFailed: {exc}")
-        traceback.print_exc()
-        sys.exit(1)
-    finally:
-        try:
-            pose_estimator.close()
-        except Exception:
-            pass
+#         print(f"\nFailed: {exc}")
+#         traceback.print_exc()
+#         sys.exit(1)
+#     finally:
+#         try:
+#             pose_estimator.close()
+#         except Exception:
+#             pass

@@ -78,8 +78,8 @@ SUPPORTED_MIME_TYPES = {
         "Upload a football free-kick video. The server will: "
         "1) Detect kick events, "
         "2) Extract individual annotated clips around each kick, "
-        "3) Save clips in the outputs directory. "
-        "Returns a JSON response with kick events and individual clip metadata."
+        "3) Upload clips to Cloudinary. "
+        "Returns a JSON response with kick events and individual clip metadata where clip_path is a Cloudinary URL."
     ),
     tags=["Analysis"],
 )
@@ -92,7 +92,7 @@ async def analyze_video_clips(
     POST /api/v1/analyze/clips
 
     Detects kicks and returns individual annotated clips.
-    Clips are written into the outputs directory.
+    Clips are uploaded to Cloudinary and clip_path in response is a cloud URL.
 
     Body: multipart/form-data with field `video`
     """
@@ -204,8 +204,9 @@ async def analyze_video_clips(
         "Upload a football free-kick video. The server will: "
         "1) Detect kick events, "
         "2) Annotate the ENTIRE video frame-by-frame with pose, ball, and trajectory overlays. "
+        "3) Upload the full annotated video to Cloudinary. "
         "All frames are annotated with detected metrics (velocity, foot distance, etc.). "
-        "Returns a JSON response with kick events and the path to the full annotated video."
+        "Returns a JSON response with kick events, local output path, and Cloudinary URL for the full annotated video."
     ),
     tags=["Analysis"],
 )
@@ -218,6 +219,7 @@ async def analyze_video_full_annotation(
     POST /api/v1/analyze/full-annotation
 
     Annotates the entire video with pose, ball detection, and metrics.
+    Uploads the full annotated video to Cloudinary and returns the cloud URL.
     Use this when you want to inspect the entire video for detections, not just clips around kicks.
 
     Body: multipart/form-data with field `video`
@@ -314,28 +316,3 @@ async def analyze_video_full_annotation(
         if os.path.exists(temp_path):
             os.remove(temp_path)
             logger.debug(f"Cleaned up temp file: {temp_path}")
-
-
-@router.get(
-    "/clips",
-    summary="List all generated clips",
-    tags=["Clips"],
-)
-async def list_clips():
-    """Return a list of all clip files currently stored on disk."""
-    clips_dir = settings.CLIPS_DIR
-    if not os.path.exists(clips_dir):
-        return {"clips": []}
-
-    files = [
-        {
-            "filename": f,
-            "url": f"/clips/{f}",
-            "size_mb": round(
-                os.path.getsize(os.path.join(clips_dir, f)) / (1024 * 1024), 2
-            ),
-        }
-        for f in sorted(os.listdir(clips_dir))
-        if f.endswith(".mp4")
-    ]
-    return {"total": len(files), "clips": files}
