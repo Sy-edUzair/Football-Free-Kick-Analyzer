@@ -4,15 +4,13 @@ Analysis Pipeline — the orchestrator.
 This is the single entry point for a full analysis run. It wires together
 all the individual services in the correct order:
 
-  VideoLoader → KickDetector → ClipExtractor → VideoMerger → AnalysisResponse
+    VideoLoader → KickDetector → ClipExtractor → AnalysisResponse
 
 Workflow:
   1. Load & validate video (VideoLoader)
   2. Detect kicks in video (KickDetector)
   3. Extract & annotate individual clips (ClipExtractor)
-  4. Merge all clips into single video (VideoMerger)
-  5. Clean up temporary files
-  6. Return merged video path in response
+    4. Return individual clips metadata in response
 
 Why have a separate pipeline class?
   The FastAPI route handler should be thin (handle HTTP concerns only).
@@ -24,7 +22,6 @@ import time
 import math
 import os
 import cv2
-import shutil
 from datetime import datetime
 from typing import Optional
 
@@ -40,7 +37,6 @@ from app.services.ball_detector import BallDetector
 from app.services.pose_estimator import PoseEstimator
 from app.services.kick_detector import KickDetector, FrameBallState
 from app.services.clip_extractor import ClipExtractor
-from app.services.video_merger import VideoMerger
 from app.services.annotator import FrameAnnotator
 
 logger = logging.getLogger(__name__)
@@ -117,7 +113,9 @@ class VideoAnnotator:
         # Step 2: Detect kicks
         logger.info("Step 2: Detecting kicks...")
         kick_detector = KickDetector(self._ball_detector)
-        detected_kicks = kick_detector.detect_kicks(video_info)
+        detected_kicks, frame_states = kick_detector.detect_kicks(
+            video_info, return_states=True
+        )
         logger.info(f"  Detected {len(detected_kicks)} kick(s)")
         for k in detected_kicks:
             logger.info(
@@ -128,7 +126,7 @@ class VideoAnnotator:
         # Step 3: Annotate full video
         logger.info("Step 3: Annotating full video with metrics...")
         output_path = self._render_annotated_video(
-            video_info, kick_detector, detected_kicks, output_filename
+            video_info, detected_kicks, frame_states, output_filename
         )
         logger.info(f"  Video saved: {output_path}")
 
@@ -166,7 +164,11 @@ class VideoAnnotator:
         return response
 
     def _render_annotated_video(
-        self, video_info, kick_detector, detected_kicks, output_filename: str
+        self,
+        video_info,
+        detected_kicks,
+        frame_states,
+        output_filename: str,
     ) -> str:
         """
         Render the full video with annotations and metrics.
@@ -176,37 +178,11 @@ class VideoAnnotator:
         os.makedirs(self._output_dir, exist_ok=True)
         output_path = os.path.join(self._output_dir, output_filename)
 
-        # Collect FrameBallState for all frames (metrics already computed)
+        # Frame states already contain detections + metrics from detect_kicks().
+        # This pass only reads video frames for rendering.
         from app.services.video_loader import iter_frames
 
-        frame_states = []
-        frames_data = []  # Store frames alongside states
-        logger.debug("Computing metrics for all frames using KickDetector logic...")
-        for frame_idx, timestamp, frame in iter_frames(
-            video_info.path, sample_every_n=1
-        ):
-            ball = self._ball_detector.detect(frame)
-            pose = self._pose_estimator.detect(
-                frame, timestamp_ms=int(timestamp * 1000)
-            )
-
-            state = FrameBallState(
-                frame_number=frame_idx,
-                timestamp=timestamp,
-                detection=ball,
-                pose=pose,
-            )
-
-            if frame_states and ball and frame_states[-1].detection:
-                kick_detector._compute_ball_motion(state, frame_states[-1])
-
-            if pose and ball:
-                kick_detector._compute_foot_metrics(
-                    state, frame_states[-1] if frame_states else None
-                )
-
-            frame_states.append(state)
-            frames_data.append(frame)  # Keep frame in sync with state
+        frame_state_by_frame = {state.frame_number: state for state in frame_states}
 
         # Setup video writer
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -233,7 +209,19 @@ class VideoAnnotator:
         frame_count = 0
         current_kick_index = 0
 
-        for state, frame in zip(frame_states, frames_data):
+        for frame_idx, timestamp, frame in iter_frames(
+            video_info.path, sample_every_n=1
+        ):
+            state = frame_state_by_frame.get(
+                frame_idx,
+                FrameBallState(
+                    frame_number=frame_idx,
+                    timestamp=timestamp,
+                    detection=None,
+                    pose=None,
+                ),
+            )
+
             # Update kick_index if this frame is a detected kick
             if state.frame_number in frame_to_kick_index:
                 current_kick_index = frame_to_kick_index[state.frame_number]
@@ -283,10 +271,8 @@ class AnalysisPipeline:
         Steps:
           1. Load & validate video
           2. Detect kicks
-          3. Extract & annotate clips to temporary directory
-          4. Merge all clips into a single video
-          5. Clean up temporary clips
-          6. Build response with merged video path
+          3. Extract & annotate clips directly to outputs directory
+          4. Build response with individual clips metadata
         """
         start_time = time.perf_counter()
         logger.info(f"Pipeline started for: {video_path}")
@@ -328,32 +314,15 @@ class AnalysisPipeline:
             for k in detected_kicks
         ]
 
-        # Step 3: Extract & annotate clips to temporary directory
+        # Step 3: Extract & annotate clips directly to outputs directory
         logger.info("Step 3: Extracting and annotating clips...")
-        temp_clips_dir = os.path.join(settings.TEMP_DIR, f"clips_{os.urandom(4).hex()}")
+        clips_output_dir = os.path.join(settings.OUTPUT_DIR, "clips")
         extractor = ClipExtractor(
             ball_detector=ball_detector,
             pose_estimator=pose_estimator,
-            output_dir=temp_clips_dir,
+            output_dir=clips_output_dir,
         )
         clip_details = extractor.extract_all(video_info, detected_kicks)
-
-        # Step 4: Merge all clips into a single video
-        logger.info("Step 4: Merging clips into single video...")
-        clip_paths = [detail.clip_path for detail in clip_details]
-        merger = VideoMerger(output_dir=settings.OUTPUT_DIR)
-        merged_filename = f"merged_kicks_{os.urandom(4).hex()}.mp4"
-        merged_video_path = merger.merge_clips(clip_paths, merged_filename)
-
-        # Step 5: Clean up temporary clips and directory
-        logger.info("Step 5: Cleaning up temporary files...")
-        try:
-            merger.cleanup_clips(clip_paths)
-            if os.path.exists(temp_clips_dir):
-                shutil.rmtree(temp_clips_dir)
-                logger.debug(f"Deleted temporary directory: {temp_clips_dir}")
-        except Exception as e:
-            logger.warning(f"Failed to clean up temp files: {e}")
 
         #  Build response
         elapsed = round(time.perf_counter() - start_time, 2)
@@ -363,14 +332,12 @@ class AnalysisPipeline:
 
         return AnalysisResponse(
             success=True,
-            message=f"Analysis complete. Detected {len(detected_kicks)} kick(s) and merged into single video.",
+            message=f"Analysis complete. Detected {len(detected_kicks)} kick(s) and generated individual clips.",
             analyzed_at=datetime.utcnow(),
             video_metadata=video_metadata,
             total_kicks_detected=len(detected_kicks),
             kick_events=kick_events,
             clips=clip_details,
-            merged_video_path=merged_video_path,
-            merged_video_filename=merged_filename,
             processing_time_seconds=elapsed,
         )
 
@@ -386,7 +353,7 @@ if __name__ == "__main__":
     )
 
     async def test_pipeline():
-        """Test the full analysis pipeline with clip merging."""
+        """Test the full analysis pipeline with individual clip output."""
         # Try to find a test video
         test_video = None
         candidates = [
@@ -407,7 +374,7 @@ if __name__ == "__main__":
             return
 
         print(f"\n{'='*60}")
-        print(f"Testing Full Analysis Pipeline with Merger")
+        print(f"Testing Full Analysis Pipeline")
         print(f"Testing with: {test_video}")
         print(f"{'='*60}\n")
 
@@ -451,12 +418,6 @@ if __name__ == "__main__":
                         f"ball={clip.ball_detections}, "
                         f"pose={clip.pose_detections})"
                     )
-
-            if result.merged_video_path:
-                print(f"\nMERGED VIDEO (Single Output):")
-                print(f"  Path: {result.merged_video_path}")
-                print(f"  Filename: {result.merged_video_filename}")
-                print(f"  → All clips automatically merged into ONE video!")
 
             print(f"\n{'='*60}\n")
 

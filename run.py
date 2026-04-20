@@ -16,7 +16,7 @@ if __name__ == "__main__":
     setup_logging("DEBUG" if settings.DEBUG else "INFO")
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",  # Bind to all interfaces for ngrok/external access
+        host="0.0.0.0",
         port=settings.APP_PORT,
         reload=settings.DEBUG,
         log_level="debug" if settings.DEBUG else "info",

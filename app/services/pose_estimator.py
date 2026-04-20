@@ -25,7 +25,7 @@ Model Setup:
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python
@@ -74,13 +74,15 @@ class PoseDetection:
     """All keypoints detected for one person in one frame."""
 
     keypoints: List[Keypoint] = field(default_factory=list)
+    _keypoint_by_index: Dict[int, Keypoint] = field(init=False, repr=False)
+
+    def __post_init__(self):
+        # Build O(1) lookup map once for repeated keypoint access.
+        self._keypoint_by_index = {kp.index: kp for kp in self.keypoints}
 
     def get_keypoint(self, index: int) -> Optional[Keypoint]:
         """Retrieve a keypoint by its MediaPipe landmark index."""
-        for kp in self.keypoints:
-            if kp.index == index:
-                return kp
-        return None
+        return self._keypoint_by_index.get(index)
 
     @property
     def visible_count(self) -> int:
@@ -102,6 +104,7 @@ class PoseEstimator:
 
     def __init__(self):
         self._landmarker = None
+        self._last_timestamp_ms = -1
         self._load_model()
 
     def _load_model(self):
@@ -167,6 +170,16 @@ class PoseEstimator:
             return None
 
         try:
+            # MediaPipe VIDEO mode requires strictly increasing timestamps.
+            # Clamp duplicates/regressions to preserve tracker stability.
+            if timestamp_ms <= self._last_timestamp_ms:
+                logger.debug(
+                    "Non-monotonic pose timestamp received (new=%d, last=%d); clamping.",
+                    timestamp_ms,
+                    self._last_timestamp_ms,
+                )
+                timestamp_ms = self._last_timestamp_ms + 1
+
             # Convert BGR to RGB for MediaPipe
             rgb = self._bgr_to_rgb(frame)
 
@@ -175,6 +188,7 @@ class PoseEstimator:
 
             # Detect poses with timestamp for video mode
             result = self._landmarker.detect_for_video(mp_image, timestamp_ms)
+            self._last_timestamp_ms = timestamp_ms
 
             # Process results (handle multiple poses, but we use first one)
             return self._process_result(result, frame.shape[:2])

@@ -20,7 +20,6 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Football Free Kick Analyzer...")
     os.makedirs(settings.OUTPUT_DIR, exist_ok=True)
-    os.makedirs(settings.CLIPS_DIR, exist_ok=True)
     os.makedirs(settings.TEMP_DIR, exist_ok=True)
     logger.info(f"Output directory: {settings.OUTPUT_DIR}")
     logger.info(f"Temp directory:   {settings.TEMP_DIR}")

@@ -1,4 +1,5 @@
 .venv/
+.env
 dataset/
 dataset.zip
 outputs/

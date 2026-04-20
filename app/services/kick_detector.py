@@ -2,7 +2,7 @@ import logging
 import math
 from collections import deque
 from dataclasses import dataclass, field
-from typing import List, Optional, Deque, Tuple
+from typing import List, Optional, Deque, Tuple, Union
 
 from app.core.config import settings
 from app.services.video_loader import VideoInfo, iter_frames
@@ -78,17 +78,23 @@ class KickDetector:
         except Exception as exc:
             logger.warning(f"PoseEstimator unavailable: {exc}. Ball-only mode.")
 
-    def detect_kicks(self, video_info: VideoInfo) -> List[DetectedKick]:
-        """Scan the video and return all confirmed kick events."""
+    def detect_kicks(
+        self, video_info: VideoInfo, return_states: bool = False
+    ) -> Union[List[DetectedKick], Tuple[List[DetectedKick], List[FrameBallState]]]:
+        """
+        Scan the video and return all confirmed kick events.
+
+        When return_states=True, also return per-frame FrameBallState values
+        so downstream consumers can reuse detections/metrics without rerunning
+        model inference.
+        """
         logger.info(f"Starting kick detection: {video_info.filename}")
 
         # sample_every = max(1, int(video_info.fps / settings.PROCESSING_FPS))
         logger.info(f"Sampling every 1 frame(s) (~{settings.PROCESSING_FPS} fps)")
 
         try:
-            logger.debug(
-                f"Initializing ball detector with video_path={video_info.path}"
-            )
+            logger.debug("Initializing ball detector with video_path=%s", video_info.path)
             self._ball_detector.init_video(video_path=video_info.path)
             logger.debug("Ball detector initialized successfully")
         except Exception as exc:
@@ -97,33 +103,17 @@ class KickDetector:
         ball_states: List[FrameBallState] = []
         prev_state: Optional[FrameBallState] = None
 
-        logger.debug(f"Starting frame iteration for {video_info.path}...")
-        for frame_idx, timestamp, frame in iter_frames(
-            video_info.path, sample_every_n=1
-        ):
-            logger.debug(f"[Frame {frame_idx}] Processing...")
-
-            # --- Ball detection ---
-            logger.debug(f"[Frame {frame_idx}] Detecting ball...")
-            if settings.ENABLE_BALL_TRACKING:
-                tracked = self._ball_detector.track(frame, frame_id=frame_idx)
-                detection = (
-                    BallDetection(
-                        x1=tracked.x1,
-                        y1=tracked.y1,
-                        x2=tracked.x2,
-                        y2=tracked.y2,
-                        confidence=tracked.confidence,
-                    )
-                    if tracked
-                    else None
-                )
-            else:
-                detection = self._ball_detector.detect(frame)
-            logger.debug(f"[Frame {frame_idx}] Ball detection: {detection}")
+        def _process_state(
+            frame_idx: int,
+            timestamp: float,
+            frame,
+            detection: Optional[BallDetection],
+        ) -> None:
+            nonlocal prev_state
+            logger.debug("[Frame %d] Ball detection: %s", frame_idx, detection)
 
             # --- Pose detection ---
-            logger.debug(f"[Frame {frame_idx}] Detecting pose...")
+            logger.debug("[Frame %d] Detecting pose...", frame_idx)
             pose = None
             if self._pose_estimator:
                 try:
@@ -131,9 +121,11 @@ class KickDetector:
                         frame, timestamp_ms=int(timestamp * 1000)
                     )
                 except Exception as exc:
-                    logger.debug(f"Pose failed at frame {frame_idx}: {exc}")
+                    logger.debug("Pose failed at frame %d: %s", frame_idx, exc)
             logger.debug(
-                f"[Frame {frame_idx}] Pose detection: {'OK' if pose else 'None'}"
+                "[Frame %d] Pose detection: %s",
+                frame_idx,
+                "OK" if pose else "None",
             )
 
             state = FrameBallState(
@@ -149,13 +141,76 @@ class KickDetector:
             if pose and detection:
                 self._compute_foot_metrics(state, prev_state)
 
-            logger.debug(f"[Frame {frame_idx}] Complete")
+            logger.debug("[Frame %d] Complete", frame_idx)
 
             ball_states.append(state)
             prev_state = state
 
             if frame_idx % 100 == 0:
                 self._log_frame(frame_idx, timestamp, state)
+
+        logger.debug("Starting frame iteration for %s...", video_info.path)
+
+        if settings.ENABLE_BALL_TRACKING:
+            batch_size = max(1, settings.BALL_TRACK_BATCH_SIZE)
+            frame_batch = []
+            frame_idx_batch: List[int] = []
+            timestamp_batch: List[float] = []
+
+            def _flush_tracking_batch() -> None:
+                if not frame_batch:
+                    return
+
+                tracked_batch = self._ball_detector.track_batch(
+                    frame_batch,
+                    frame_ids=frame_idx_batch,
+                )
+
+                for frame_idx, timestamp, frame, tracked in zip(
+                    frame_idx_batch,
+                    timestamp_batch,
+                    frame_batch,
+                    tracked_batch,
+                ):
+                    detection = (
+                        BallDetection(
+                            x1=tracked.x1,
+                            y1=tracked.y1,
+                            x2=tracked.x2,
+                            y2=tracked.y2,
+                            confidence=tracked.confidence,
+                        )
+                        if tracked
+                        else None
+                    )
+                    _process_state(frame_idx, timestamp, frame, detection)
+
+                frame_batch.clear()
+                frame_idx_batch.clear()
+                timestamp_batch.clear()
+
+            for frame_idx, timestamp, frame in iter_frames(
+                video_info.path, sample_every_n=1
+            ):
+                logger.debug(
+                    "[Frame %d] Buffering frame for batched tracking...",
+                    frame_idx,
+                )
+                frame_batch.append(frame)
+                frame_idx_batch.append(frame_idx)
+                timestamp_batch.append(timestamp)
+
+                if len(frame_batch) >= batch_size:
+                    _flush_tracking_batch()
+
+            _flush_tracking_batch()
+        else:
+            for frame_idx, timestamp, frame in iter_frames(
+                video_info.path, sample_every_n=1
+            ):
+                logger.debug("[Frame %d] Processing...", frame_idx)
+                detection = self._ball_detector.detect(frame)
+                _process_state(frame_idx, timestamp, frame, detection)
 
         logger.info(f"Processed {len(ball_states)} sampled frames.")
         kicks = self._find_kicks(ball_states)
@@ -166,6 +221,8 @@ class KickDetector:
                 f"t={k.timestamp_seconds:.2f}s, conf={k.confidence_score:.2f}, "
                 f"method={k.detection_method}"
             )
+        if return_states:
+            return kicks, ball_states
         return kicks
 
     def _compute_ball_motion(self, state: FrameBallState, prev: FrameBallState) -> None:
@@ -251,7 +308,7 @@ class KickDetector:
             if state.detection is None:
                 continue
             if i in suspicious_frames:
-                logger.debug(f"Frame {i}: skipped (detection recovery window)")
+                logger.debug("Frame %d: skipped (detection recovery window)", i)
                 continue
 
             # ---- G1: foot acceleration spike ----
@@ -507,10 +564,13 @@ class KickDetector:
                 parts.append(f"foot_dist={state.foot_distance_to_ball:.0f}px")
                 parts.append(f"foot_vel={state.foot_velocity:.0f}px/s")
             logger.debug(
-                f"Frame {frame_idx:5d} | {timestamp:.2f}s | {', '.join(parts)}"
+                "Frame %5d | %.2fs | %s",
+                frame_idx,
+                timestamp,
+                ", ".join(parts),
             )
         else:
-            logger.debug(f"Frame {frame_idx:5d} | {timestamp:.2f}s | ball not found")
+            logger.debug("Frame %5d | %.2fs | ball not found", frame_idx, timestamp)
 
 
 if __name__ == "__main__":

@@ -137,10 +137,30 @@ class BallDetector:
         Returns:
             TrackedBall with track ID, or None
         """
+        tracked = self.track_batch([frame], frame_ids=[frame_id])
+        return tracked[0] if tracked else None
+
+    def track_batch(
+        self, frames: List[np.ndarray], frame_ids: Optional[List[int]] = None
+    ) -> List[Optional[TrackedBall]]:
+        """
+        Run BotSort tracking on a batch of frames.
+
+        Batching improves GPU utilization and throughput while preserving
+        tracking continuity via persist=True.
+        """
+        if not frames:
+            return []
+
+        if frame_ids is None:
+            frame_ids = list(range(self._frame_index, self._frame_index + len(frames)))
+        elif len(frame_ids) != len(frames):
+            raise ValueError("frame_ids length must match frames length")
+
         try:
-            # Use YOLO's track() method with BotSort tracker
+            # Use YOLO's track() method with BotSort tracker on a frame batch.
             results = self._model.track(
-                frame,
+                frames,
                 verbose=False,
                 persist=True,  # Enable prediction mode: fills gaps when distant ball loses detection
                 conf=settings.BALL_CONFIDENCE_THRESHOLD,
@@ -148,11 +168,13 @@ class BallDetector:
                 tracker="botsort.yaml",  # Use BotSort for better tracking accuracy
             )
 
-            best: Optional[TrackedBall] = None
+            tracked_results: List[Optional[TrackedBall]] = []
 
-            for result in results:
+            for result, frame_id in zip(results, frame_ids):
+                best: Optional[TrackedBall] = None
                 boxes = result.boxes
                 if boxes is None:
+                    tracked_results.append(None)
                     continue
 
                 for box in boxes:
@@ -177,32 +199,78 @@ class BallDetector:
                     if best is None or conf > best.confidence:
                         best = tracked
 
-            # Increment frame index for next frame
-            self._frame_index += 1
-            return best
+                tracked_results.append(best)
+
+            self._frame_index += len(frames)
+            return tracked_results
 
         except Exception as exc:
-            logger.warning(f"BotSort tracking failed, falling back to detect(): {exc}")
-            # Fallback to regular detection if tracking fails
-            det = self.detect(frame)
-            if det:
-                return TrackedBall(
-                    track_id=-1,
-                    x1=det.x1,
-                    y1=det.y1,
-                    x2=det.x2,
-                    y2=det.y2,
-                    confidence=det.confidence,
-                    frame_id=frame_id,
+            logger.warning(
+                f"BotSort batch tracking failed, falling back to detect(): {exc}"
+            )
+            detections = self.detect_batch(frames)
+            tracked_results: List[Optional[TrackedBall]] = []
+
+            for det, frame_id in zip(detections, frame_ids):
+                if not det:
+                    tracked_results.append(None)
+                    continue
+
+                tracked_results.append(
+                    TrackedBall(
+                        track_id=-1,
+                        x1=det.x1,
+                        y1=det.y1,
+                        x2=det.x2,
+                        y2=det.y2,
+                        confidence=det.confidence,
+                        frame_id=frame_id,
+                    )
                 )
-            return None
+
+            return tracked_results
 
     def detect_batch(self, frames: List[np.ndarray]) -> List[Optional[BallDetection]]:
         """
         Detect balls in a list of frames.  More efficient than calling
         detect() in a loop because YOLO batches the inference.
         """
-        return [self.detect(f) for f in frames]
+        if not frames:
+            return []
+
+        results = self._model(
+            frames,
+            verbose=False,
+            conf=settings.BALL_CONFIDENCE_THRESHOLD,
+            classes=[settings.BALL_CLASS_ID],
+        )
+
+        detections: List[Optional[BallDetection]] = []
+
+        for result in results:
+            best: Optional[BallDetection] = None
+            boxes = result.boxes
+
+            if boxes is None:
+                detections.append(None)
+                continue
+
+            for box in boxes:
+                cls_id = int(box.cls[0])
+                if cls_id != settings.BALL_CLASS_ID:
+                    continue
+
+                conf = float(box.conf[0])
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                det = BallDetection(x1=x1, y1=y1, x2=x2, y2=y2, confidence=conf)
+
+                if best is None or conf > best.confidence:
+                    best = det
+
+            detections.append(best)
+
+        self._frame_index += len(frames)
+        return detections
 
 
 # if __name__ == "__main__":

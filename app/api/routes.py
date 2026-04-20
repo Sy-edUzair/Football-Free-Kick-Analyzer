@@ -73,13 +73,13 @@ SUPPORTED_MIME_TYPES = {
         422: {"model": ErrorResponse, "description": "No kicks detected"},
         500: {"model": ErrorResponse, "description": "Internal processing error"},
     },
-    summary="Analyze video and merge clips",
+    summary="Analyze video and generate clips",
     description=(
         "Upload a football free-kick video. The server will: "
         "1) Detect kick events, "
         "2) Extract individual annotated clips around each kick, "
-        "3) Merge all clips into a single video for easy download. "
-        "Returns a JSON response with kick events, individual clip metadata, and the merged video path."
+        "3) Save clips in the outputs directory. "
+        "Returns a JSON response with kick events and individual clip metadata."
     ),
     tags=["Analysis"],
 )
@@ -91,8 +91,8 @@ async def analyze_video_clips(
     """
     POST /api/v1/analyze/clips
 
-    Detects kicks and returns a merged video containing all annotated clips.
-    This is the recommended mode for getting individual kick clips merged into one file.
+    Detects kicks and returns individual annotated clips.
+    Clips are written into the outputs directory.
 
     Body: multipart/form-data with field `video`
     """

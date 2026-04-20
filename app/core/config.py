@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     POSE_MIN_DETECTION_CONFIDENCE: float = Field(default=0.5)
     POSE_MIN_TRACKING_CONFIDENCE: float = Field(default=0.5)
     ENABLE_BALL_TRACKING: bool = Field(default=True)
+    # Number of frames to batch per YOLO track() call
+    BALL_TRACK_BATCH_SIZE: int = Field(default=8)
 
     # BGR colours
     KEYPOINT_COLOR: tuple = Field(default=(0, 255, 0))  # Green
