@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 class CloudinaryUploader:
     """Uploads clip videos to Cloudinary and returns public URLs."""
 
+    _PLAYABLE_VIDEO_EAGER = [
+        {
+            "format": "mp4",
+            "video_codec": "h264",
+        }
+    ]
+
     def __init__(self):
         if not settings.CLOUDINARY_CLOUD_NAME:
             raise CloudUploadError(
@@ -56,6 +63,8 @@ class CloudinaryUploader:
                 folder=settings.CLOUDINARY_FOLDER,
                 public_id=base_name,
                 overwrite=True,
+                eager=self._PLAYABLE_VIDEO_EAGER,
+                eager_async=False,
             )
         except Exception as exc:
             raise CloudUploadError(
@@ -63,7 +72,7 @@ class CloudinaryUploader:
                 detail=str(exc),
             ) from exc
 
-        secure_url = result.get("secure_url")
+        secure_url = self._extract_playable_video_url(result)
         if not secure_url:
             raise CloudUploadError(
                 "Cloudinary upload did not return a secure URL.",
@@ -90,6 +99,8 @@ class CloudinaryUploader:
                 folder=settings.CLOUDINARY_FULL_VIDEO_FOLDER,
                 public_id=base_name,
                 overwrite=True,
+                eager=self._PLAYABLE_VIDEO_EAGER,
+                eager_async=False,
             )
         except Exception as exc:
             raise CloudUploadError(
@@ -97,7 +108,7 @@ class CloudinaryUploader:
                 detail=str(exc),
             ) from exc
 
-        secure_url = result.get("secure_url")
+        secure_url = self._extract_playable_video_url(result)
         if not secure_url:
             raise CloudUploadError(
                 "Cloudinary full-video upload did not return a secure URL.",
@@ -106,3 +117,12 @@ class CloudinaryUploader:
 
         logger.debug("Uploaded full annotated video to Cloudinary: %s", secure_url)
         return secure_url
+
+    def _extract_playable_video_url(self, upload_result: dict) -> str:
+        """Prefer eager-transcoded URL (H.264 MP4), fallback to original URL."""
+        eager_results = upload_result.get("eager") or []
+        if eager_results:
+            eager_url = eager_results[0].get("secure_url")
+            if eager_url:
+                return eager_url
+        return upload_result.get("secure_url", "")
